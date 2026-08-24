@@ -7,6 +7,29 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the version is `0.x`, the three documented options are stable but the
 tuning knobs may change without a major bump.
 
+## [Unreleased]
+
+### Added
+
+- `setup(opts)`: hyprecise registers its own bindings, so the integration is one
+  line in a Hyprland Lua config instead of an eighteen-line snippet. It binds
+  through `hl.bind` directly, which works with or without Omarchy — the two
+  install paths in the README collapse into one.
+- `keys` option, taking either a modifier prefix (`"SUPER + ALT"`, arrows
+  appended) or a per-direction table of chords (`{ left = "SUPER + H", ... }`),
+  which binds only the directions it names.
+- Bindings now carry descriptions, so they appear in
+  `omarchy menu keybindings --print`.
+
+### Changed
+
+- The offline spec covers chord derivation: 57 assertions, up from 46.
+
+Configs using the previous hand-rolled loop keep working — `M.run` and the
+callable module are unchanged. See
+[ADR 0001](docs/adr/0001-hyprecise-registers-its-own-bindings.md) for why the
+binding moved inside the module.
+
 ## [0.1.0] — 2026-08-24
 
 Initial release.

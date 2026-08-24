@@ -23,6 +23,13 @@ is what lets a direction be expressed in screen space ("move the right edge
 rightward") instead of in intent ("grow") — which is ambiguous for a column that
 has no neighbour on the side you pressed.
 
+## Chord
+
+The key combination that names a direction. Four of them, one per direction, are
+what hyprecise presents to a person; a chord is the only way a resize is ever
+asked for. A modifier alone — `SUPER + ALT` — denotes the set of four, because
+the directions are arrows and the arrow is implied by the direction it names.
+
 ## Stop
 
 One of the discrete widths the focused column is allowed to occupy. A keypress

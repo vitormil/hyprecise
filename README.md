@@ -42,8 +42,9 @@ height.
 
 - **Hyprland with Lua configuration.** Developed and used on 0.56.2.
 - **[Omarchy](https://omarchy.org) 4.0+** — optional. Hyprecise is not an Omarchy
-  plugin and has no Omarchy dependency; Omarchy just happens to ship the Lua
-  config setup that makes the binding a one-liner.
+  plugin and has no Omarchy dependency. The integration is the same line either
+  way: `setup()` calls `hl.bind` directly, and Omarchy's `o.bind` is only a
+  wrapper over that.
 - **Lua 5.4+ or LuaJIT** — only to run the test suite. Not needed at runtime;
   Hyprland embeds its own interpreter.
 
@@ -55,61 +56,33 @@ The repository *is* the install. Clone it straight into place:
 git clone https://github.com/vitormil/hyprecise.git ~/.config/hyprecise
 ```
 
-Then add the bindings.
-
-### Omarchy
-
-In `~/.config/hypr/bindings.lua`:
+Then add one line to your Hyprland Lua config — `~/.config/hypr/bindings.lua`
+on Omarchy, wherever you keep bindings otherwise:
 
 ```lua
--- hyprecise: step the focused column's WIDTH through a ladder of sizes, with
--- the other columns splitting what is left over equally. Runs in-process --
--- no subprocess, no hyprctl, no jq.
-local hyprecise_path = os.getenv("HOME") .. "/.config/hyprecise/hyprecise.lua"
-local hyprecise_opts = {
+dofile(os.getenv("HOME") .. "/.config/hyprecise/hyprecise.lua").setup()
+```
+
+That binds `SUPER + ALT + <arrow>` to the four directions, with descriptions, so
+they show up in `omarchy menu keybindings --print` alongside everything else.
+Pass options to change any of it:
+
+```lua
+dofile(os.getenv("HOME") .. "/.config/hyprecise/hyprecise.lua").setup({
+  keys = "SUPER + CTRL", -- a different modifier, arrows appended
   mode = "auto", -- auto | wide | compact  (auto: >=3440px uses sixths)
   loop = true, -- wrap around the ends of the ladder
-  min_width = nil, -- floor for a non-focused column; nil = monitor/12
-}
-
--- dofile on every press, so edits to hyprecise.lua take effect without
--- reloading Hyprland. pcall so a bug in it can never take the compositor down.
-for _, direction in ipairs({ "Left", "Right", "Up", "Down" }) do
-  o.bind("SUPER + ALT + " .. direction, nil, function()
-    local ok, err = pcall(function()
-      dofile(hyprecise_path)(direction:lower(), hyprecise_opts)
-    end)
-    if not ok then
-      hl.notification.create({ text = "hyprecise: " .. tostring(err), duration = 5000 })
-    end
-  end)
-end
+})
 ```
 
-### Plain Hyprland (no Omarchy)
-
-Identical, except `o.bind(keys, nil, fn)` becomes `hl.bind(keys, fn)`:
-
-```lua
-local hyprecise_path = os.getenv("HOME") .. "/.config/hyprecise/hyprecise.lua"
-local hyprecise_opts = { mode = "auto", loop = true, min_width = nil }
-
-for _, direction in ipairs({ "Left", "Right", "Up", "Down" }) do
-  hl.bind("SUPER + ALT + " .. direction, function()
-    local ok, err = pcall(function()
-      dofile(hyprecise_path)(direction:lower(), hyprecise_opts)
-    end)
-    if not ok then
-      hl.notification.create({ text = "hyprecise: " .. tostring(err), duration = 5000 })
-    end
-  end)
-end
-```
+`setup()` runs while your config is being read, so it is written never to throw:
+if anything goes wrong it binds nothing, prints a `hyprecise:` line to the
+Hyprland log and raises a notification. It cannot take the rest of your bindings
+down with it. Each keypress is separately wrapped, for the same reason.
 
 > [!IMPORTANT]
 > **On Omarchy, `SUPER + ALT + <arrow>` is already taken.** Personal bindings
-> load after Omarchy's defaults, so pasting the snippet above silently replaces
-> these four:
+> load after Omarchy's defaults, so the line above replaces these four:
 >
 > | Binding | Omarchy default it replaces |
 > |---|---|
@@ -118,9 +91,16 @@ end
 > | `SUPER + ALT + Up`    | Move window to group on top |
 > | `SUPER + ALT + Down`  | Move window to group on bottom |
 >
-> If you use window grouping, either bind hyprecise to a different chord or
-> rehome the group bindings — they are ordinary `hl.dsp.window.move({ into_group = "l" })`
-> dispatches and will work anywhere you put them.
+> There is no clean alternative to move to: Omarchy binds *every* modifier over
+> the arrows — plain `SUPER` focuses, `SHIFT` swaps, `ALT` groups, `SHIFT + ALT`
+> moves the workspace between monitors, `CTRL` walks a group. So if you use
+> window grouping, either give hyprecise non-arrow chords with `keys`, or rehome
+> the group bindings — they are ordinary
+> `hl.dsp.window.move({ into_group = "l" })` dispatches and will work anywhere
+> you put them.
+>
+> Hyprecise binds with a description, so whatever it takes over is visible in
+> `omarchy menu keybindings --print` rather than merely gone.
 
 ## Shortcuts
 
@@ -143,10 +123,11 @@ move would be smaller than the convergence tolerance.
 
 ## Options
 
-Pass these in the `hyprecise_opts` table. These three are the supported surface.
+Pass these to `setup()`. These four are the supported surface.
 
 | Option | Default | Meaning |
 |---|---|---|
+| `keys` | `"SUPER + ALT"` | A modifier prefix, which binds all four arrows. Or a table naming chords per direction — `{ left = "SUPER + H", right = "SUPER + L", up = "SUPER + K", down = "SUPER + J" }` — which binds only the directions it names. |
 | `mode` | `"auto"` | `"wide"` seeds the ladder with sixths of the monitor, `"compact"` with quarters. `"auto"` picks `wide` at ≥3440px, `compact` below. |
 | `loop` | `true` | Wrap around the ends of the ladder. With `false`, pressing past the widest or narrowest stop does nothing. |
 | `min_width` | `nil` | Floor in px for a *non-focused* column. `nil` means monitor width ÷ 12. Raising it removes wide stops from the ladder. |
@@ -170,8 +151,8 @@ change between releases without a major version bump.
 git -C ~/.config/hyprecise pull
 ```
 
-No reload needed. The binding re-reads the module on every keypress, so the next
-press uses the new code — which is also why you can edit `hyprecise.lua` and test
+No reload needed. `setup()` records the path it was loaded from and re-reads the
+module on every keypress, so the next press uses the new code — which is also why you can edit `hyprecise.lua` and test
 a change immediately.
 
 ## Tests
@@ -184,9 +165,9 @@ the suite runs anywhere:
 lua tests/hyprecise_spec.lua
 ```
 
-46 assertions covering ladder construction, stepping, redistribution, width
-conservation, the floor, and column detection (including vertical stacks and
-ragged layouts). CI runs them on every push and pull request.
+57 assertions covering ladder construction, stepping, redistribution, width
+conservation, the floor, column detection (including vertical stacks and ragged
+layouts), and chord derivation. CI runs them on every push and pull request.
 
 ## How it works
 
@@ -194,7 +175,9 @@ The design rationale lives in the header comment of
 [`hyprecise.lua`](hyprecise.lua) — the ladder, the equal split, the screen-space
 direction rule, and why ragged layouts are handled separately.
 [`CONTEXT.md`](CONTEXT.md) defines the vocabulary those comments use: *column*,
-*stop*, *ladder*, *fair share*, *boundary*, *decomposable*, *ragged*, *snap*.
+*stop*, *ladder*, *fair share*, *boundary*, *chord*, *decomposable*, *ragged*,
+*snap*. [`docs/adr/`](docs/adr) records the decisions behind the shape of the
+thing.
 
 ## License
 

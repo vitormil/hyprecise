@@ -252,5 +252,39 @@ check("ragged layout is NOT decomposable", M.decomposable(ragged), false)
 check("lone window -> 1 column", #M.columns(boxes({ { 13, 39, 3414 } })), 1)
 check("pure vertical stack -> 1 column", #M.columns(boxes({ { 13, 39, 3414 }, { 13, 750, 3414 } })), 1)
 
+-- ---------------------------------------------------------------------------
+-- Chords
+-- ---------------------------------------------------------------------------
+
+local function chord_count(keys)
+  local n = 0
+  for _ in pairs(M.chords(keys)) do
+    n = n + 1
+  end
+  return n
+end
+
+check("default keys bind four directions", chord_count(nil), 4)
+check("default keys -> SUPER + ALT + Right", M.chords(nil).right, "SUPER + ALT + Right")
+check("default keys -> SUPER + ALT + Up", M.chords(nil).up, "SUPER + ALT + Up")
+check("prefix is honoured", M.chords("SUPER + CTRL").left, "SUPER + CTRL + Left")
+
+-- A prefix written the way it reads in a binding line, with the joining "+"
+-- already there, must not produce "SUPER + ALT +  + Down".
+check("trailing + in prefix is dropped", M.chords("SUPER + ALT + ").down, "SUPER + ALT + Down")
+
+local vim = { left = "SUPER + H", right = "SUPER + L", up = "SUPER + K", down = "SUPER + J" }
+check("explicit map binds four", chord_count(vim), 4)
+check("explicit map is taken literally", M.chords(vim).right, "SUPER + L")
+
+-- A partial map is a request for fewer bindings, not an error.
+local horizontal = { left = "SUPER + H", right = "SUPER + L" }
+check("partial map binds only what it names", chord_count(horizontal), 2)
+check("partial map leaves up unbound", M.chords(horizontal).up, nil)
+
+-- Anything else binds nothing, so setup() is a no-op rather than a crash.
+check("unusable keys bind nothing", chord_count(42), 0)
+check("stray direction keys are ignored", chord_count({ sideways = "SUPER + S" }), 0)
+
 print(string.format("\n%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

@@ -38,8 +38,9 @@
 -- boundary rightward and the column shrinks. That rule is what makes a
 -- two-window layout behave the way it always has, from either focus position.
 --
--- The pure decision logic (`columns`, `decomposable`, `plan`) has no Hyprland
--- dependency and is exercised by tests/hyprecise_spec.lua under plain `lua`.
+-- The pure decision logic (`columns`, `decomposable`, `plan`, `chords`) has no
+-- Hyprland dependency and is exercised by tests/hyprecise_spec.lua under plain
+-- `lua`.
 
 local M = {}
 
@@ -56,6 +57,7 @@ local function round(x)
 end
 
 local DEFAULTS = {
+  keys = "SUPER + ALT", -- modifier prefix, or a direction -> chord table
   mode = "auto", -- auto | wide | compact
   loop = true, -- wrap around the ends of the ladder
   min_width = nil, -- floor for a non-focused column; nil = monitor/12
@@ -81,6 +83,34 @@ end
 -- The "same stop" tolerance. Every other epsilon is derived from it, so a
 -- keypress can never produce a move smaller than the ambiguity that made two
 -- ladder stops indistinguishable in the first place.
+local ARROW = { left = "Left", right = "Right", up = "Up", down = "Down" }
+
+--- Expand the `keys` option into a direction -> chord map.
+---
+--- A string is a modifier prefix and denotes all four chords, because the four
+--- directions are arrows and always have been. A table is taken literally, and
+--- binds only the directions it names -- which is how a vim-style layout, or a
+--- horizontal-only one, gets expressed.
+function M.chords(keys)
+  if keys == nil then
+    keys = DEFAULTS.keys
+  end
+  local out = {}
+  if type(keys) == "string" then
+    local prefix = keys:gsub("%s*%+%s*$", ""):gsub("%s+$", "")
+    for direction, arrow in pairs(ARROW) do
+      out[direction] = prefix .. " + " .. arrow
+    end
+  elseif type(keys) == "table" then
+    for direction in pairs(ARROW) do
+      if type(keys[direction]) == "string" then
+        out[direction] = keys[direction]
+      end
+    end
+  end
+  return out
+end
+
 local function snap_of(monitor_width, opts)
   return opts.snap or math.max(16, idiv(monitor_width, 100))
 end
@@ -457,6 +487,62 @@ local function run(direction, user_opts)
 end
 
 M.run = run
+
+-- --------------------------------------------------------------------------
+-- Binding (impure)
+-- --------------------------------------------------------------------------
+
+--- Path of this file. `dofile` remembers the path it was handed and `source`
+--- gives it back with a leading "@", so a handler can re-read the module on
+--- every press. Nil on a Lua built without the debug library, which costs the
+--- reload-on-edit behaviour and nothing else.
+local SELF = debug and debug.getinfo(1, "S").source:match("^@(.*)")
+
+local DESCRIPTIONS = {
+  left = "Hyprecise: move the left edge leftward",
+  right = "Hyprecise: move the right edge rightward",
+  up = "Hyprecise: jump to the widest stop",
+  down = "Hyprecise: jump to the even split",
+}
+
+--- Bind hyprecise to the keyboard. One line in a Hyprland Lua config is the
+--- whole integration:
+---
+---   dofile(os.getenv("HOME") .. "/.config/hyprecise/hyprecise.lua").setup()
+---
+--- `hl.bind` is called directly rather than Omarchy's `o.bind`, which is only a
+--- wrapper over it -- so the same call works with or without Omarchy.
+---
+--- This runs while the config file is being read, unlike everything else here,
+--- which runs on a keypress. So it must never throw: an error raised at that
+--- moment would take the rest of the user's bindings down with it.
+function M.setup(user_opts)
+  local ok, err = pcall(function()
+    local opts = with_defaults(user_opts)
+    for direction, chord in pairs(M.chords(opts.keys)) do
+      hl.bind(chord, function()
+        -- Re-read the module on every press, so an edit or a `git pull` takes
+        -- effect on the next keystroke. pcall so a bug in it can never take
+        -- the compositor down.
+        local pressed, oops = pcall(function()
+          local current = SELF and dofile(SELF) or M
+          current.run(direction, opts)
+        end)
+        if not pressed then
+          hl.notification.create({ text = "hyprecise: " .. tostring(oops), duration = 5000 })
+        end
+      end, { description = DESCRIPTIONS[direction] })
+    end
+  end)
+  if not ok then
+    -- Nothing is bound. Say so where a Hyprland user will find it.
+    print("hyprecise: setup failed: " .. tostring(err))
+    pcall(function()
+      hl.notification.create({ text = "hyprecise: setup failed: " .. tostring(err), duration = 8000 })
+    end)
+  end
+  return ok
+end
 
 return setmetatable(M, {
   __call = function(_, direction, opts)
