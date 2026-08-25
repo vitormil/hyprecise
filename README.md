@@ -36,8 +36,6 @@ height.
               2/3              1/6    1/6
 ```
 
-<!-- demo: drop the recording here as ![demo](docs/demo.gif) -->
-
 ## Requirements
 
 - **Hyprland with Lua configuration.** Developed and used on 0.56.2.
@@ -178,7 +176,8 @@ can really have. On a 3440 monitor with 10px gaps and 3px borders the row is
 
 ## Options
 
-Pass these to `setup()`. These three are the supported surface.
+Pass these to `setup()`. These three are the supported surface: from 1.0.0 on, a
+breaking change to any of them takes a major version bump.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -189,8 +188,8 @@ Pass these to `setup()`. These three are the supported surface.
 ### Tuning
 
 Geometry heuristics, exposed for debugging. **Treat these as internal** — they
-exist to work around how the layout engine reacts to a resize, and they may
-change between releases without a major version bump.
+exist to work around how the layout engine reacts to a resize, and they are
+deliberately outside the promise above: they may change in any release.
 
 | Option | Default | Meaning |
 |---|---|---|
@@ -203,6 +202,13 @@ change between releases without a major version bump.
 
 ```sh
 git -C ~/.config/hyprecise pull
+```
+
+That tracks `master`, which is where releases land. To sit on a fixed version
+instead, check out its tag and move when you choose to:
+
+```sh
+git -C ~/.config/hyprecise checkout v1.0.0
 ```
 
 No reload needed. `setup()` records the path it was loaded from and re-reads the

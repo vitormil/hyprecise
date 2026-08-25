@@ -4,10 +4,18 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-While the version is `0.x`, a documented option may still be withdrawn — as
-`mode` was — and the tuning knobs may change without a major bump.
+From 1.0.0 on, the supported surface is `setup(opts)` and its `keys`, `loop` and
+`min_width` options: a breaking change to any of them takes a major bump.
+Everything else the module exposes is outside that promise — `M.run`, the
+callable module, and the internals the offline spec reaches for — and so are the
+tuning knobs, which exist to work around how the layout engine reacts to a
+resize and may change in any release.
 
-## [Unreleased]
+## [1.0.0] — 2026-08-25
+
+The supported surface is now fixed. Two things a 0.1.0 config could rely on are
+gone — the `mode` option and the ragged-layout fallback — which is what makes
+this a major rather than a 0.2.0.
 
 ### Added
 
@@ -78,7 +86,7 @@ While the version is `0.x`, a documented option may still be withdrawn — as
   from the topmost window, straddling windows, columns with no anchor, and the
   tolerance boundary between merging and not: 99 assertions, up from 46.
 
-### Removed
+### Removed (breaking)
 
 - **The ragged-layout fallback.** A layout with no full-height cut now reads as a
   single column, and a single column has no boundary to move, so the chord is
@@ -95,7 +103,8 @@ While the version is `0.x`, a documented option may still be withdrawn — as
   `loop` and `min_width`.
 
 Configs using the previous hand-rolled loop keep working — `M.run` and the
-callable module are unchanged. See
+callable module are unchanged — but both are deprecated as of 1.0.0 and sit
+outside the supported surface. Move to `setup()`. See
 [ADR 0001](docs/adr/0001-hyprecise-registers-its-own-bindings.md) for why the
 binding moved inside the module.
 
@@ -120,3 +129,6 @@ Initial release.
   across.
 - Offline spec covering the pure decision core: 46 assertions, no compositor
   required.
+
+[1.0.0]: https://github.com/vitormil/hyprecise/compare/v0.1.0...v1.0.0
+[0.1.0]: https://github.com/vitormil/hyprecise/releases/tag/v0.1.0
