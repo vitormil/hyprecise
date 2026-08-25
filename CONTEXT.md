@@ -12,8 +12,23 @@ neighbours. Columns are what hyprecise resizes. Windows are not.
 
 ## Row
 
-The full set of columns on a workspace, read left to right. Hyprecise reasons
-about one row at a time: the one the focused window belongs to.
+The full set of columns on one workspace of one monitor, read left to right.
+Hyprecise reasons about exactly one row at a time — the focused window's — and
+never reads or moves a window outside it. A workspace lives on a single monitor,
+so the two halves of that boundary normally coincide; where they are ever seen to
+disagree the row is not trustworthy and hyprecise does nothing.
+
+## Available width
+
+The monitor's logical width less anything reserved at its left or right edges. A
+bar along the top of the screen reserves height and does not enter into it; a bar
+down one side does. The granularity is read from this and nothing else.
+
+## Row width
+
+The width the columns actually share out: the sum of their widths. Smaller than
+the available width by the gaps between and around the windows. Stops are
+fractions of this, so every stop names a width a column can really have.
 
 ## Boundary
 
@@ -39,14 +54,20 @@ it happened to be.
 ## Ladder
 
 The ordered set of stops available for the current keypress. It is derived rather
-than configured: the mode contributes its fractions, the fair share is folded in,
-and stops that would starve a neighbour past the floor are dropped.
+than configured: the granularity says how many stops there are, the fair share is
+folded in, and stops that would starve a neighbour past the floor are dropped.
 
-## Mode
+## Granularity
 
-Which evenly spaced fractions of the monitor seed the ladder. `wide` uses sixths,
-`compact` uses quarters, `auto` chooses by monitor width. A wide monitor earns
-finer stops because there is room for adjacent stops to look different.
+How many equal slices the row is cut into. Derived from the available width and
+never chosen: a wide monitor earns finer stops because there is room for adjacent
+stops to look different, and it earns them by being wide rather than by being
+told that it is.
+
+## Slice
+
+One granularity-th of the row. The spacing between adjacent stops, and the unit a
+ladder is measured in.
 
 ## Fair share
 

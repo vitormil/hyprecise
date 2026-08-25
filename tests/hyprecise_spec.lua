@@ -4,13 +4,15 @@
 --   lua tests/hyprecise_spec.lua
 --
 -- No compositor required. The suite touches no Hyprland API -- only
--- M.columns, M.decomposable, M.base_ladder, M.build_ladder, M.step and
--- M.plan -- which is the whole reason the decision logic is kept pure.
+-- M.row_windows, M.columns, M.decomposable, M.granularity, M.base_ladder,
+-- M.build_ladder, M.step and M.plan -- which is the whole reason the decision
+-- logic is kept pure.
 
 local here = arg[0]:match("(.*)/") or "."
 local M = dofile(here .. "/../hyprecise.lua")
 
-local MW = 3440 -- the ultrawide these fixtures are sized for
+local MW = 3440 -- the ultrawide these fixtures are sized for, less nothing:
+-- its bar reserves height, not width, so available width is the full 3440.
 local passed, failed = 0, 0
 
 local function fmt(v)
@@ -54,7 +56,7 @@ local function plan(widths, focused, direction, opts)
     widths = widths,
     focused = focused,
     direction = direction,
-    monitor_width = MW,
+    available_width = MW,
     opts = opts,
   })
 end
@@ -68,24 +70,57 @@ end
 -- Ladder construction
 -- ---------------------------------------------------------------------------
 
-check("base_ladder auto @3440 -> wide", M.base_ladder(MW, "auto"), { 573, 1146, 1719, 2292, 2865 })
-check("base_ladder auto @1920 -> compact", M.base_ladder(1920, "auto"), { 480, 960, 1440 })
-check("base_ladder forced compact @3440", M.base_ladder(MW, "compact"), { 860, 1720, 2580 })
+-- Granularity is read from the monitor and cannot be asked for. The two widths
+-- that used to have hand-picked ladders keep exactly the ladders they had.
+check("granularity @1366 clamps up to the minimum", M.granularity(1366), 3)
+check("granularity @1600", M.granularity(1600), 3)
+check("granularity @1920 -> quarters, as `compact` did", M.granularity(1920), 4)
+check("granularity @2560 -> fifths", M.granularity(2560), 5)
+check("granularity @3440 -> sixths, as `wide` did", M.granularity(MW), 6)
+check("granularity @3840 -> sevenths", M.granularity(3840), 7)
+check("granularity @5120 clamps down to the maximum", M.granularity(5120), 8)
 
--- Real geometry: two windows on this monitor sum to 3398, not 3440 (gaps and
--- borders eat 42px). Fair share is therefore 1699, which is within snap of the
--- 1719 stop and replaces it.
-local l2 = M.build_ladder(MW, 3398, 2)
-check("N=2 ladder (fair 1699 replaces 1719)", l2, { 573, 1146, 1699, 2292, 2865 })
+-- A ladder that got coarser as the monitor got wider would be nonsense.
+local monotonic, previous = true, 0
+for w = 640, 8000, 10 do
+  local g = M.granularity(w)
+  if g < previous then
+    monotonic = false
+  end
+  previous = g
+end
+check("granularity never decreases with width", monotonic, true)
+
+-- A side bar is reserved WIDTH, so it reaches the ladder; the top bar on this
+-- monitor reserves height and does not.
+check("a 300px side bar leaves granularity alone", M.granularity(MW - 300), 6)
+check("a 900px side bar coarsens the ladder", M.granularity(MW - 900), 5)
+
+-- Stops are fractions of the ROW, not of the screen. Real geometry: two windows
+-- on this monitor sum to 3398, not 3440 -- gaps and borders eat 42px.
+check("base_ladder over a 3398 row, 6 slices", M.base_ladder(3398, 6), { 566, 1132, 1699, 2265, 2831 })
+check("base_ladder over a 1900 row, 4 slices", M.base_ladder(1900, 4), { 475, 950, 1425 })
+check("base_ladder yields one stop short of the whole", #M.base_ladder(3398, 8), 7)
+
+-- Taking a stop as row*k/slices rather than as a multiple of a rounded slice is
+-- what lands the fair share exactly on one instead of a pixel beside it.
+local l2, fair2 = M.build_ladder(MW, 3398, 2)
+check("N=2 fair share IS a stop, nothing to splice", { l2[3], fair2 }, { 1699, 1699 })
+check("N=2 ladder", l2, { 566, 1132, 1699, 2265, 2831 })
 
 local l3 = M.build_ladder(MW, 3382, 3)
-check("N=3 ladder (fair 1127 replaces 1146)", l3, { 573, 1127, 1719, 2292 })
+check("N=3 ladder (fair 1127 is already stop 2)", l3, { 563, 1127, 1691, 2254 })
 
 local l4 = M.build_ladder(MW, 3380, 4)
-check("N=4 ladder (fair 845 spliced in)", l4, { 573, 845, 1146, 1719, 2292 })
+check("N=4 ladder (fair 845 spliced in)", l4, { 563, 845, 1126, 1690, 2253 })
 
 local l6 = M.build_ladder(MW, 3360, 6)
-check("N=6 ladder (top stops trimmed by floor)", l6, { 560, 1146, 1719 })
+check("N=6 ladder (top stops trimmed by floor)", l6, { 560, 1120, 1680 })
+
+-- The floor reads the screen, not the ladder, so it does not move when the
+-- number of windows does.
+local narrow = M.build_ladder(MW, 3398, 2, { min_width = 1500 })
+check("a raised floor removes the wide stops", narrow, { 1699 })
 
 -- ---------------------------------------------------------------------------
 -- N=2 -- must keep behaving the way it always has, from either focus position
@@ -93,10 +128,10 @@ check("N=6 ladder (top stops trimmed by floor)", l6, { 560, 1146, 1719 })
 
 local two = { 1719, 1679 }
 
-check("N=2 focus0 right  -> left col grows", targets(two, 1, "right"), { 2292, 1106 })
-check("N=2 focus1 right  -> left col grows (inverts)", targets(two, 2, "right"), { 2252, 1146 })
-check("N=2 focus0 left   -> left col shrinks", targets(two, 1, "left"), { 1146, 2252 })
-check("N=2 focus1 left   -> right col grows", targets(two, 2, "left"), { 1106, 2292 })
+check("N=2 focus0 right  -> left col grows", targets(two, 1, "right"), { 2265, 1133 })
+check("N=2 focus1 right  -> left col grows (inverts)", targets(two, 2, "right"), { 2266, 1132 })
+check("N=2 focus0 left   -> left col shrinks", targets(two, 1, "left"), { 1132, 2266 })
+check("N=2 focus1 left   -> right col grows", targets(two, 2, "left"), { 1133, 2265 })
 
 -- The key property the whole direction rule exists to preserve: `right` moves
 -- the boundary rightward no matter which of the two windows is focused.
@@ -107,10 +142,10 @@ local x0 = targets(two, 1, "left")
 local x1 = targets(two, 2, "left")
 check("N=2 left shrinks col0 from BOTH focuses", { x0[1] < two[1], x1[1] < two[1] }, { true, true })
 
-check("N=2 focus0 up     -> maximize", targets(two, 1, "up"), { 2865, 533 })
-check("N=2 maxed  up     -> back to equal", targets({ 2865, 533 }, 1, "up"), { 1699, 1699 })
-check("N=2 focus0 down   -> already equal, minimize", targets(two, 1, "down"), { 573, 2825 })
-check("N=2 wide   down   -> equalize", targets({ 2865, 533 }, 1, "down"), { 1699, 1699 })
+check("N=2 focus0 up     -> maximize", targets(two, 1, "up"), { 2831, 567 })
+check("N=2 maxed  up     -> back to equal", targets({ 2831, 567 }, 1, "up"), { 1699, 1699 })
+check("N=2 focus0 down   -> already equal, minimize", targets(two, 1, "down"), { 566, 2832 })
+check("N=2 wide   down   -> equalize", targets({ 2831, 567 }, 1, "down"), { 1699, 1699 })
 
 -- ---------------------------------------------------------------------------
 -- N=3 -- the case that motivated the rewrite
@@ -118,24 +153,24 @@ check("N=2 wide   down   -> equalize", targets({ 2865, 533 }, 1, "down"), { 1699
 
 local three = { 1719, 829, 834 } -- live geometry from workspace 2
 
-check("N=3 focus0 right  -> others shrink equally", targets(three, 1, "right"), { 2292, 545, 545 })
+check("N=3 focus0 right  -> others shrink equally", targets(three, 1, "right"), { 2254, 564, 564 })
 check("N=3 focus1 right  -> middle grows", targets(three, 2, "right"), { 1128, 1127, 1127 })
-check("N=3 focus2 right  -> LAST col shrinks", targets(three, 3, "right"), { 1405, 1404, 573 })
+check("N=3 focus2 right  -> LAST col shrinks", targets(three, 3, "right"), { 1410, 1409, 563 })
 check("N=3 focus2 left   -> LAST col grows", targets(three, 3, "left"), { 1128, 1127, 1127 })
 check("N=3 focus0 down   -> equalize", targets(three, 1, "down"), { 1127, 1128, 1127 })
-check("N=3 focus0 up     -> maximize", targets(three, 1, "up"), { 2292, 545, 545 })
+check("N=3 focus0 up     -> maximize", targets(three, 1, "up"), { 2254, 564, 564 })
 
 -- ---------------------------------------------------------------------------
 -- N=4 / N=5
 -- ---------------------------------------------------------------------------
 
 local four = { 845, 845, 845, 845 }
-check("N=4 focus0 right", targets(four, 1, "right"), { 1146, 745, 745, 744 })
-check("N=4 focus3 right  -> LAST col shrinks", targets(four, 4, "right"), { 936, 936, 935, 573 })
+check("N=4 focus0 right", targets(four, 1, "right"), { 1126, 752, 751, 751 })
+check("N=4 focus3 right  -> LAST col shrinks", targets(four, 4, "right"), { 939, 939, 939, 563 })
 
 local five = { 676, 676, 676, 676, 676 }
--- usable is 3380, so the 2234 left over splits 559/559/558/558.
-check("N=5 focus2 right", targets(five, 3, "right"), { 559, 559, 1146, 558, 558 })
+-- The row is 3380, so the 2254 left over splits 564/564/563/563.
+check("N=5 focus2 right", targets(five, 3, "right"), { 564, 564, 1126, 563, 563 })
 
 -- ---------------------------------------------------------------------------
 -- No-ops and edges
@@ -145,9 +180,9 @@ check("N=1 -> no-op", plan({ 3414 }, 1, "right"), nil)
 check("bad direction -> no-op", plan(two, 1, "sideways"), nil)
 check("focus out of range -> no-op", plan(two, 3, "right"), nil)
 
-check("loop=true wraps past the top", targets({ 2865, 533 }, 1, "right", { loop = true }), { 573, 2825 })
-check("loop=false clamps (no-op at the top)", plan({ 2865, 533 }, 1, "right", { loop = false }), nil)
-check("loop=true wraps past the bottom", targets({ 573, 2825 }, 1, "left", { loop = true }), { 2865, 533 })
+check("loop=true wraps past the top", targets({ 2831, 567 }, 1, "right", { loop = true }), { 566, 2832 })
+check("loop=false clamps (no-op at the top)", plan({ 2831, 567 }, 1, "right", { loop = false }), nil)
+check("loop=true wraps past the bottom", targets({ 566, 2832 }, 1, "left", { loop = true }), { 2831, 567 })
 
 -- Too many columns for the floor to allow any stop at all.
 local many = {}
@@ -160,14 +195,14 @@ check("N=12 -> ladder empty, no-op", plan(many, 1, "right"), nil)
 -- Invariants that must hold for every plan
 -- ---------------------------------------------------------------------------
 
-local layouts = { two, three, four, five, { 1000, 1200, 1198 }, { 2865, 266, 267 } }
+local layouts = { two, three, four, five, { 1000, 1200, 1198 }, { 2831, 283, 284 } }
 local dirs = { "left", "right", "up", "down" }
 local sum_ok, floor_ok, height_ok = true, true, true
 
 for _, widths in ipairs(layouts) do
-  local usable = 0
+  local row_width = 0
   for _, w in ipairs(widths) do
-    usable = usable + w
+    row_width = row_width + w
   end
   for focused = 1, #widths do
     for _, dir in ipairs(dirs) do
@@ -180,7 +215,7 @@ for _, widths in ipairs(layouts) do
             floor_ok = false
           end
         end
-        if total ~= usable then
+        if total ~= row_width then
           sum_ok = false
         end
         -- The plan describes widths only; nothing in it can move a height.
@@ -220,6 +255,54 @@ for _, widths in ipairs(layouts) do
   end
 end
 check("non-focused columns equal within 1px", equal_ok, true)
+
+-- ---------------------------------------------------------------------------
+-- Row membership -- which windows a keypress is allowed to touch
+-- ---------------------------------------------------------------------------
+
+local SCOPE = { monitor = 0, workspace = 2 }
+
+--- A window fixture. Everything defaults to "tiled, and on this monitor and
+--- workspace"; pass `monitor = false` to make the field absent altogether.
+local function win(t)
+  t = t or {}
+  return {
+    mapped = t.mapped ~= false,
+    hidden = t.hidden or false,
+    floating = t.floating or false,
+    fullscreen = t.fullscreen or 0,
+    monitor = t.monitor ~= false and { id = t.monitor or SCOPE.monitor } or nil,
+    workspace = t.workspace ~= false and { id = t.workspace or SCOPE.workspace } or nil,
+  }
+end
+
+local function members(list)
+  local row = M.row_windows(list, SCOPE)
+  return row and #row or nil
+end
+
+check("all in scope -> every tiled window", members({ win(), win() }), 2)
+check("floating is not a column", members({ win(), win({ floating = true }) }), 1)
+check(
+  "hidden, unmapped and fullscreen are not columns",
+  members({ win(), win({ hidden = true }), win({ mapped = false }), win({ fullscreen = 2 }) }),
+  1
+)
+check("no windows -> an empty row, not a refusal", members({}), 0)
+check("no list at all -> an empty row, not a refusal", members(nil), 0)
+
+-- The guard. A tiled window from elsewhere sits at an x beyond this monitor,
+-- so it would bucket into a phantom rightmost column and the real windows would
+-- be shrunk to make room for it. Abandon the keypress instead.
+check("tiled window on another monitor -> abort", M.row_windows({ win(), win({ monitor = 1 }) }, SCOPE), nil)
+check("tiled window on another workspace -> abort", M.row_windows({ win(), win({ workspace = 9 }) }, SCOPE), nil)
+check("tiled window with no monitor -> abort", M.row_windows({ win({ monitor = false }) }, SCOPE), nil)
+check("tiled window with no workspace -> abort", M.row_windows({ win({ workspace = false }) }, SCOPE), nil)
+
+-- An out-of-scope window that was never going to be a column aborts nothing.
+-- A floating scratchpad on the next monitor along is simply not part of this row.
+check("floating window from elsewhere is ignored", members({ win(), win({ floating = true, monitor = 1 }) }), 1)
+check("hidden window from elsewhere is ignored", members({ win(), win({ hidden = true, workspace = 9 }) }), 1)
 
 -- ---------------------------------------------------------------------------
 -- Column detection

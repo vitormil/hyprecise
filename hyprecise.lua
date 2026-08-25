@@ -38,9 +38,14 @@
 -- boundary rightward and the column shrinks. That rule is what makes a
 -- two-window layout behave the way it always has, from either focus position.
 --
--- The pure decision logic (`columns`, `decomposable`, `plan`, `chords`) has no
--- Hyprland dependency and is exercised by tests/hyprecise_spec.lua under plain
--- `lua`.
+-- The ladder is derived, never configured. How many stops it has follows from
+-- the monitor's available width; where those stops sit follows from the width
+-- the columns actually share out.
+--
+-- The pure decision logic (`row_windows`, `columns`, `decomposable`,
+-- `granularity`, `base_ladder`, `build_ladder`, `plan`, `step`, `chords`) has
+-- no Hyprland dependency and is exercised by tests/hyprecise_spec.lua under
+-- plain `lua`.
 
 local M = {}
 
@@ -58,10 +63,9 @@ end
 
 local DEFAULTS = {
   keys = "SUPER + ALT", -- modifier prefix, or a direction -> chord table
-  mode = "auto", -- auto | wide | compact
   loop = true, -- wrap around the ends of the ladder
-  min_width = nil, -- floor for a non-focused column; nil = monitor/12
-  snap = nil, -- "same stop" tolerance; nil = max(16, monitor/100)
+  min_width = nil, -- floor for a non-focused column; nil = available/12
+  snap = nil, -- "same stop" tolerance; nil = max(16, available/100)
   column_tolerance = 8, -- px slack when bucketing windows into columns
   converge_tolerance = 4, -- px; below this a column is considered on target
   max_passes = 4, -- sweep attempts before giving up
@@ -111,8 +115,43 @@ function M.chords(keys)
   return out
 end
 
-local function snap_of(monitor_width, opts)
-  return opts.snap or math.max(16, idiv(monitor_width, 100))
+local function snap_of(available, opts)
+  return opts.snap or math.max(16, idiv(available, 100))
+end
+
+-- --------------------------------------------------------------------------
+-- Row membership (pure)
+-- --------------------------------------------------------------------------
+
+--- The tiled members of the row, or nil when the row cannot be trusted.
+---
+--- `scope` is the monitor and workspace the focused window belongs to. A
+--- Hyprland workspace lives on exactly one monitor, so every window handed here
+--- should already be in scope; one that is not means this reading of the layout
+--- is wrong. It would be bucketed into a column of its own -- a window on the
+--- next monitor along has an x beyond this monitor's right edge, so it becomes a
+--- phantom rightmost column -- and the real windows would be shrunk to make room
+--- for it. So a violation abandons the keypress rather than quietly dropping the
+--- offender.
+---
+--- Windows excluded for the ordinary reasons -- unmapped, hidden, floating,
+--- fullscreen -- were never part of the row and never trigger that: a floating
+--- scratchpad from elsewhere is simply not a column.
+--- @param windows table array of HL.Window
+--- @param scope table { monitor = id, workspace = id }
+--- @return table|nil
+function M.row_windows(windows, scope)
+  local out = {}
+  for _, w in ipairs(windows or {}) do
+    if w.mapped and not w.hidden and not w.floating and (w.fullscreen or 0) == 0 then
+      local m, ws = w.monitor, w.workspace
+      if not m or not ws or m.id ~= scope.monitor or ws.id ~= scope.workspace then
+        return nil
+      end
+      out[#out + 1] = w
+    end
+  end
+  return out
 end
 
 -- --------------------------------------------------------------------------
@@ -170,27 +209,53 @@ end
 -- Ladder (pure)
 -- --------------------------------------------------------------------------
 
---- The mode-derived stops, as fractions of the monitor width.
-function M.base_ladder(monitor_width, mode)
-  if mode ~= "wide" and mode ~= "compact" then
-    mode = monitor_width >= 3440 and "wide" or "compact"
+-- The narrowest column still worth having. Granularity is chosen to put a slice
+-- as near this as the available width allows, which is the whole of what used to
+-- be the `mode` option: a wide monitor earns finer stops because there is room
+-- for adjacent stops to look different -- and it earns them by being wide, not
+-- by being told it is. 540 is the value that reproduces both of the hand-picked
+-- ladders it replaces, quarters at 1920 and sixths at 3440, so no monitor that
+-- was already served well is served worse.
+local IDEAL_SLICE = 540
+
+-- Below three slices a ladder has one stop either side of the fair share and
+-- stops being a ladder; above eight, adjacent stops on any real monitor differ
+-- by about a window border.
+local MIN_SLICES, MAX_SLICES = 3, 8
+
+--- How many equal slices the row is cut into, read from the available width.
+function M.granularity(available)
+  local slices = round(available / IDEAL_SLICE)
+  if slices < MIN_SLICES then
+    return MIN_SLICES
+  elseif slices > MAX_SLICES then
+    return MAX_SLICES
   end
-  if mode == "wide" then
-    local base = idiv(monitor_width, 6)
-    return { base, base * 2, base * 3, base * 4, base * 5 }
+  return slices
+end
+
+--- The stops, as fractions of the row: every multiple of a slice short of the
+--- whole. Taken as `row * k / slices` rather than as multiples of a rounded
+--- slice, so a fair share that divides the row evenly lands exactly on a stop
+--- instead of a pixel beside one.
+function M.base_ladder(row_width, slices)
+  local stops = {}
+  for k = 1, slices - 1 do
+    stops[k] = idiv(row_width * k, slices)
   end
-  local q = idiv(monitor_width, 4)
-  return { q, q * 2, q * 3 }
+  return stops
 end
 
 --- Splice the equal-split width into the ladder and drop stops that would
 --- starve another column below the floor.
+--- @param available number monitor width less its left and right reservations
+--- @param row_width number the width the columns actually share out
 --- @return table ladder, number fair
-function M.build_ladder(monitor_width, usable, n, opts)
+function M.build_ladder(available, row_width, n, opts)
   opts = with_defaults(opts)
-  local stops = M.base_ladder(monitor_width, opts.mode)
-  local fair = idiv(usable, n)
-  local snap = snap_of(monitor_width, opts)
+  local stops = M.base_ladder(row_width, M.granularity(available))
+  local fair = idiv(row_width, n)
+  local snap = snap_of(available, opts)
 
   -- Insert `fair`, replacing any stop it is indistinguishable from. Keeping
   -- both would leave two stops a few px apart and make one keypress a
@@ -212,8 +277,11 @@ function M.build_ladder(monitor_width, usable, n, opts)
     spliced[#spliced + 1] = fair
   end
 
-  local floor_w = opts.min_width or idiv(monitor_width, 12)
-  local max_focused = usable - (n - 1) * floor_w
+  -- The floor is a fraction of the screen, not of the ladder. It says what a
+  -- column needs in order to stay useful, which is a property of the monitor and
+  -- not of how many stops happen to fit across it.
+  local floor_w = opts.min_width or idiv(available, 12)
+  local max_focused = row_width - (n - 1) * floor_w
   local ladder = {}
   for _, s in ipairs(spliced) do
     if s >= floor_w and s <= max_focused then
@@ -227,11 +295,11 @@ end
 -- Target selection (pure)
 -- --------------------------------------------------------------------------
 
---- Spread `usable - target` equally over the non-focused columns, handing the
---- remainder pixels out one at a time so repeated presses cannot drift.
-local function distribute(usable, target, n, focused)
+--- Spread `row_width - target` equally over the non-focused columns, handing
+--- the remainder pixels out one at a time so repeated presses cannot drift.
+local function distribute(row_width, target, n, focused)
   local targets = {}
-  local rest = usable - target
+  local rest = row_width - target
   local each = idiv(rest, n - 1)
   local extra = rest - each * (n - 1)
   local k = 0
@@ -249,8 +317,8 @@ end
 local DIRECTIONS = { left = true, right = true, up = true, down = true }
 
 --- Decide the target width of every column.
---- @param input table { widths, focused, direction, monitor_width, opts }
---- @return table|nil { targets, ladder, fair, target, usable } or nil for no-op
+--- @param input table { widths, focused, direction, available_width, opts }
+--- @return table|nil { targets, ladder, fair, target, row_width }, nil on no-op
 function M.plan(input)
   if not DIRECTIONS[input.direction] then
     return nil
@@ -263,15 +331,15 @@ function M.plan(input)
   end
 
   local opts = with_defaults(input.opts)
-  local monitor_width = input.monitor_width
-  local snap = snap_of(monitor_width, opts)
+  local available = input.available_width
+  local snap = snap_of(available, opts)
 
-  local usable = 0
+  local row_width = 0
   for _, w in ipairs(widths) do
-    usable = usable + w
+    row_width = row_width + w
   end
 
-  local ladder, fair = M.build_ladder(monitor_width, usable, n, opts)
+  local ladder, fair = M.build_ladder(available, row_width, n, opts)
   if #ladder == 0 then
     return nil
   end
@@ -286,11 +354,11 @@ function M.plan(input)
   end
 
   return {
-    targets = distribute(usable, target, n, focused),
+    targets = distribute(row_width, target, n, focused),
     ladder = ladder,
     fair = fair_stop,
     target = target,
-    usable = usable,
+    row_width = row_width,
   }
 end
 
@@ -352,14 +420,18 @@ local function monitor_width(m)
   return round(w)
 end
 
-local function tiled_windows(ws)
-  local out = {}
-  for _, w in ipairs(hl.get_workspace_windows(ws) or {}) do
-    if w.mapped and not w.hidden and not w.floating and (w.fullscreen or 0) == 0 then
-      out[#out + 1] = w
-    end
-  end
-  return out
+--- The available width: the monitor's logical width less whatever is reserved
+--- at its left or right edges. A vertical bar is reserved space, and stops taken
+--- from the raw width would put the outermost of them underneath it. Reservations
+--- are in logical coordinates, like window geometry, so they subtract after the
+--- scale has been divided out.
+local function available_width(m)
+  local reserved = m.reserved or {}
+  return monitor_width(m) - (reserved.left or 0) - (reserved.right or 0)
+end
+
+local function tiled_windows(ws, scope)
+  return M.row_windows(hl.get_workspace_windows(ws), scope)
 end
 
 local function resize(win, delta)
@@ -400,15 +472,19 @@ end
 --- distribute equally. Step the focused window itself and let dwindle spread
 --- the difference however its tree says.
 local function ragged(win, monitor, direction, opts)
-  local mw = monitor_width(monitor)
-  local ladder = M.base_ladder(mw, opts.mode)
+  -- A ragged row has no width to measure: its windows overlap in x, so summing
+  -- them overcounts -- on the README's own example, to about twice the screen.
+  -- The available width is the only well-defined stand-in, so on a ragged layout
+  -- the stops are fractions of the screen rather than of the row.
+  local avail = available_width(monitor)
+  local ladder = M.base_ladder(avail, M.granularity(avail))
   if #ladder == 0 then
     return
   end
-  local snap = snap_of(mw, opts)
+  local snap = snap_of(avail, opts)
   local current = win.size.x
   local reserved = monitor.reserved or {}
-  local monitor_right = (monitor.x or 0) + mw - (reserved.right or 0)
+  local monitor_right = (monitor.x or 0) + monitor_width(monitor) - (reserved.right or 0)
   local is_last = (win.at.x + current) >= (monitor_right - 3 * opts.column_tolerance)
   local fair = ladder[idiv(#ladder + 1, 2)]
 
@@ -431,13 +507,18 @@ local function run(direction, user_opts)
   if not win or win.floating or (win.fullscreen or 0) ~= 0 then
     return
   end
-  local ws = win.workspace
-  if not ws then
+  local ws, monitor = win.workspace, win.monitor
+  if not ws or not monitor then
     return
   end
 
-  local wins = tiled_windows(ws)
-  if #wins < 2 then
+  -- Everything hyprecise reads or moves belongs to one row: the focused window's
+  -- workspace on the focused window's monitor. `row_windows` returns nil if that
+  -- turns out not to hold, and a keypress that cannot trust its own reading of
+  -- the layout does nothing.
+  local scope = { monitor = monitor.id, workspace = ws.id }
+  local wins = tiled_windows(ws, scope)
+  if not wins or #wins < 2 then
     return
   end
 
@@ -453,7 +534,6 @@ local function run(direction, user_opts)
     return
   end
 
-  local monitor = win.monitor
   if not M.decomposable(cols, opts.column_tolerance) then
     return ragged(win, monitor, direction, opts)
   end
@@ -476,7 +556,7 @@ local function run(direction, user_opts)
     widths = widths,
     focused = focused,
     direction = direction,
-    monitor_width = monitor_width(monitor),
+    available_width = available_width(monitor),
     opts = opts,
   })
   if not plan then

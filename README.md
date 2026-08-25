@@ -70,8 +70,8 @@ Pass options to change any of it:
 ```lua
 dofile(os.getenv("HOME") .. "/.config/hyprecise/hyprecise.lua").setup({
   keys = "SUPER + CTRL", -- a different modifier, arrows appended
-  mode = "auto", -- auto | wide | compact  (auto: >=3440px uses sixths)
   loop = true, -- wrap around the ends of the ladder
+  min_width = 400, -- never squeeze a neighbour below this
 })
 ```
 
@@ -121,16 +121,42 @@ workspace with fewer than two tiled windows, on a single column (a lone window o
 a pure vertical stack has no vertical boundary to move), or when the requested
 move would be smaller than the convergence tolerance.
 
+A keypress only ever reads or moves windows on the focused window's own
+workspace, on the focused window's own monitor. If a tiled window outside that
+row ever turns up, hyprecise abandons the keypress rather than resize on a
+reading of the layout it cannot trust.
+
+## The ladder follows the monitor
+
+There is nothing to configure about the shape of the ladder, because there is
+nothing to get wrong. Hyprecise divides the monitor's **available width** — its
+logical width less anything a side bar reserves — into as many equal *slices* as
+will fit while keeping each one about 540px, the narrowest column still worth
+having. Every multiple of a slice short of the whole is a stop.
+
+| Monitor | Slices | Stops |
+|---|---|---|
+| 1366 | 3 | thirds |
+| 1920 | 4 | quarters |
+| 2560 | 5 | fifths |
+| 3440 | 6 | sixths |
+| 3840 | 7 | sevenths |
+| 5120 | 8 | eighths |
+
+The stops themselves are fractions of the **row** — the widths your windows
+actually add up to — not of the screen, so a stop always names a width a column
+can really have. On a 3440 monitor with 10px gaps and 3px borders the row is
+3398, and the half stop is 1699 rather than 1720.
+
 ## Options
 
-Pass these to `setup()`. These four are the supported surface.
+Pass these to `setup()`. These three are the supported surface.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `keys` | `"SUPER + ALT"` | A modifier prefix, which binds all four arrows. Or a table naming chords per direction — `{ left = "SUPER + H", right = "SUPER + L", up = "SUPER + K", down = "SUPER + J" }` — which binds only the directions it names. |
-| `mode` | `"auto"` | `"wide"` seeds the ladder with sixths of the monitor, `"compact"` with quarters. `"auto"` picks `wide` at ≥3440px, `compact` below. |
 | `loop` | `true` | Wrap around the ends of the ladder. With `false`, pressing past the widest or narrowest stop does nothing. |
-| `min_width` | `nil` | Floor in px for a *non-focused* column. `nil` means monitor width ÷ 12. Raising it removes wide stops from the ladder. |
+| `min_width` | `nil` | Floor in px for a *non-focused* column. `nil` means available width ÷ 12. Raising it removes wide stops from the ladder. |
 
 ### Tuning
 
@@ -140,7 +166,7 @@ change between releases without a major version bump.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `snap` | `nil` | Tolerance for "already on this stop". `nil` means `max(16, monitor ÷ 100)`. Every other epsilon derives from it. |
+| `snap` | `nil` | Tolerance for "already on this stop". `nil` means `max(16, available width ÷ 100)`. Every other epsilon derives from it. |
 | `column_tolerance` | `8` | Pixel slack when bucketing windows into columns. Raise it if gaps or borders cause windows in one column to be read as two. |
 | `converge_tolerance` | `4` | Below this many pixels of error, a column counts as on target. |
 | `max_passes` | `4` | Sweeps attempted before giving up. A dwindle resize is tree-relative, so one pass does not always converge. |
@@ -165,9 +191,11 @@ the suite runs anywhere:
 lua tests/hyprecise_spec.lua
 ```
 
-57 assertions covering ladder construction, stepping, redistribution, width
-conservation, the floor, column detection (including vertical stacks and ragged
-layouts), and chord derivation. CI runs them on every push and pull request.
+80 assertions covering granularity across monitor sizes, ladder construction,
+stepping, redistribution, width conservation, the floor, row membership
+(including the abort on an out-of-scope window), column detection (including
+vertical stacks and ragged layouts), and chord derivation. CI runs them on every
+push and pull request.
 
 ## How it works
 
@@ -175,8 +203,8 @@ The design rationale lives in the header comment of
 [`hyprecise.lua`](hyprecise.lua) — the ladder, the equal split, the screen-space
 direction rule, and why ragged layouts are handled separately.
 [`CONTEXT.md`](CONTEXT.md) defines the vocabulary those comments use: *column*,
-*stop*, *ladder*, *fair share*, *boundary*, *chord*, *decomposable*, *ragged*,
-*snap*. [`docs/adr/`](docs/adr) records the decisions behind the shape of the
+*row*, *available width*, *row width*, *stop*, *slice*, *ladder*, *granularity*,
+*fair share*, *boundary*, *chord*, *decomposable*, *ragged*, *snap*. [`docs/adr/`](docs/adr) records the decisions behind the shape of the
 thing.
 
 ## License
