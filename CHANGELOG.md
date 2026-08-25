@@ -9,13 +9,6 @@ While the version is `0.x`, a documented option may still be withdrawn — as
 
 ## [Unreleased]
 
-### Removed
-
-- The `mode` option. The ladder is no longer something to choose: its shape is
-  read from the monitor. A `mode` left in an existing `setup()` call is ignored
-  silently and can simply be deleted. The supported surface is now `keys`,
-  `loop` and `min_width`.
-
 ### Added
 
 - `setup(opts)`: hyprecise registers its own bindings, so the integration is one
@@ -28,8 +21,39 @@ While the version is `0.x`, a documented option may still be withdrawn — as
 - Bindings now carry descriptions, so they appear in
   `omarchy menu keybindings --print`.
 
+### Fixed
+
+- **A nested column no longer breaks the row.** Columns were bucketed by exact
+  x-interval, so a column subdivided into a tree — `A | B | C` where `C` is split
+  into `D` over `E`, and `E` into `F | G` — was read as five columns rather than
+  three, failed the tiling check, and fell through to the fallback that nudges
+  only the focused window. It now reads as `A | B | C` at any depth, and the
+  chord does the same thing from every window inside `C`: on a 3440 monitor,
+  `Right` from `D`, from `F` and from `G` all take the row from
+  `1699 | 839 | 844` to `1410 | 1409 | 563`, with the `F | G` split inside `C`
+  keeping its proportions.
+
 ### Changed
 
+- **A column is a maximal x-interval that no window crosses.** Windows whose
+  x-intervals overlap are one column, however deeply the layout engine has
+  subdivided them, and hyprecise never looks inside one. This replaces bucketing
+  by exact interval, and with it the whole notion of a layout that cannot be
+  decomposed into columns: overlapping windows now merge into the column they
+  share instead of producing a contradictory reading of the row.
+- **A resize is aimed at its column's anchor** — the member spanning the whole
+  column, ties going to the topmost. A window that spans its column has no
+  side-by-side split above it inside the column, so the first such split the
+  layout engine walks up to is the column's own outer boundary. Aiming at the
+  focused window instead would move whichever boundary happened to be nearest it
+  in the tree, which is what made a nested column unresizable.
+- **A keypress is confined to one row, by filtering.** Windows are selected by
+  the focused window's monitor *and* workspace, and anything outside that is
+  dropped before the layout is read. Columns are read from x-intervals alone, so
+  a foreign window would otherwise be read as a real column and the genuine ones
+  shrunk to make room for it. Every column a keypress touches is now on the
+  current monitor by construction. Windows that were never columns — floating,
+  hidden, unmapped, fullscreen — are ignored as before.
 - **The ladder follows the monitor.** The available width — logical width less
   whatever a side bar reserves at the left or right — is divided into as many
   equal slices as fit while keeping each near 540px, and every multiple of a
@@ -45,17 +69,30 @@ While the version is `0.x`, a documented option may still be withdrawn — as
   share now lands exactly on a stop instead of a pixel beside one. Existing
   ladders shift by at most 48px, about 1.4% of an ultrawide, with no change to
   how many stops there are or how many presses reach any of them.
-- **A keypress is confined to one row.** Windows are selected by the focused
-  window's monitor *and* workspace. A tiled window from outside that row would
-  bucket into a phantom column and shrink the real windows to make room for it,
-  so its presence abandons the keypress instead. Windows that were never columns
-  — floating, hidden, unmapped, fullscreen — are ignored as before and trigger
-  nothing.
-- The selection moved into the pure core as `M.row_windows`, so which windows a
-  keypress may touch is now covered by the offline spec rather than living in
-  the untested Hyprland shell.
-- The offline spec covers granularity across monitor sizes and row membership:
-  80 assertions, up from 46.
+- Row selection and column reading both live in the pure core, as
+  `M.row_windows`, `M.columns` and `M.anchored`, so which windows a keypress may
+  touch and how they are grouped are covered by the offline spec rather than
+  living in the untested Hyprland shell.
+- The offline spec covers granularity across monitor sizes, row membership,
+  nesting at several depths, the flipped column that distinguishes the anchor
+  from the topmost window, straddling windows, columns with no anchor, and the
+  tolerance boundary between merging and not: 99 assertions, up from 46.
+
+### Removed
+
+- **The ragged-layout fallback.** A layout with no full-height cut now reads as a
+  single column, and a single column has no boundary to move, so the chord is
+  silent where it used to nudge the focused window along a screen-fraction
+  ladder. Two cases lose behaviour: `[A][B]` over a full-width `C`, and a
+  workspace subdivided entirely within itself. Both are the deliberate cost of
+  hyprecise dealing only in top-level columns. `M.decomposable` is gone; the new
+  `M.anchored` reports the one layout that is still refused — a column no member
+  spans, which a row split top and bottom before each half is split side by side
+  can produce.
+- The `mode` option. The ladder is no longer something to choose: its shape is
+  read from the monitor. A `mode` left in an existing `setup()` call is ignored
+  silently and can simply be deleted. The supported surface is now `keys`,
+  `loop` and `min_width`.
 
 Configs using the previous hand-rolled loop keep working — `M.run` and the
 callable module are unchanged. See

@@ -4,7 +4,7 @@
 --   lua tests/hyprecise_spec.lua
 --
 -- No compositor required. The suite touches no Hyprland API -- only
--- M.row_windows, M.columns, M.decomposable, M.granularity, M.base_ladder,
+-- M.row_windows, M.columns, M.anchored, M.granularity, M.base_ladder,
 -- M.build_ladder, M.step and M.plan -- which is the whole reason the decision
 -- logic is kept pure.
 
@@ -291,13 +291,16 @@ check(
 check("no windows -> an empty row, not a refusal", members({}), 0)
 check("no list at all -> an empty row, not a refusal", members(nil), 0)
 
--- The guard. A tiled window from elsewhere sits at an x beyond this monitor,
--- so it would bucket into a phantom rightmost column and the real windows would
--- be shrunk to make room for it. Abandon the keypress instead.
-check("tiled window on another monitor -> abort", M.row_windows({ win(), win({ monitor = 1 }) }, SCOPE), nil)
-check("tiled window on another workspace -> abort", M.row_windows({ win(), win({ workspace = 9 }) }, SCOPE), nil)
-check("tiled window with no monitor -> abort", M.row_windows({ win({ monitor = false }) }, SCOPE), nil)
-check("tiled window with no workspace -> abort", M.row_windows({ win({ workspace = false }) }, SCOPE), nil)
+-- Scope is a filter, not a veto. A tiled window from elsewhere sits at an x
+-- beyond this monitor, so read as a column it would be a phantom rightmost one
+-- and the real windows would be shrunk to make room for it. Dropping it removes
+-- that danger while leaving the chord alive for the windows that do belong.
+check("tiled window on another monitor is dropped", members({ win(), win({ monitor = 1 }) }), 1)
+check("tiled window on another workspace is dropped", members({ win(), win({ workspace = 9 }) }), 1)
+check("tiled window with no monitor is dropped", members({ win({ monitor = false }), win() }), 1)
+check("tiled window with no workspace is dropped", members({ win({ workspace = false }), win() }), 1)
+check("a row of foreign windows is empty, not a refusal", members({ win({ monitor = 1 }), win({ monitor = 2 }) }), 0)
+check("an in-scope row is never trimmed", members({ win(), win(), win() }), 3)
 
 -- An out-of-scope window that was never going to be a column aborts nothing.
 -- A floating scratchpad on the next monitor along is simply not part of this row.
@@ -316,24 +319,73 @@ local function boxes(list)
   return out
 end
 
-local flat = M.columns(boxes({ { 13, 39, 1719 }, { 1748, 39, 829 }, { 2593, 39, 834 } }))
+--- The widths of the columns a layout reads as, left to right.
+local function widths_of(list)
+  local out = {}
+  for i, c in ipairs(M.columns(boxes(list))) do
+    out[i] = c.w
+  end
+  return out
+end
+
+local flat = M.columns(boxes({ { 13, 39, 1719 }, { 1758, 39, 829 }, { 2613, 39, 814 } }))
 check("3 side-by-side windows -> 3 columns", #flat, 3)
-check("3 columns are decomposable", M.decomposable(flat), true)
+check("3 columns keep their own widths", widths_of({ { 13, 39, 1719 }, { 1758, 39, 829 }, { 2613, 39, 814 } }), { 1719, 829, 814 })
+check("every plain column is its own anchor", { flat[1].anchor, flat[2].anchor, flat[3].anchor }, { 1, 2, 3 })
+check("3 plain columns are anchored", M.anchored(flat), true)
 
 -- A column holding a vertical stack is still one column.
-local stacked = M.columns(boxes({ { 13, 39, 1719 }, { 13, 750, 1719 }, { 1748, 39, 1679 } }))
+local stacked = M.columns(boxes({ { 13, 39, 1719 }, { 13, 750, 1719 }, { 1758, 39, 1669 } }))
 check("vertical stack collapses to 1 column", #stacked, 2)
-check("stacked layout is decomposable", M.decomposable(stacked), true)
 check("stacked column keeps both windows", #stacked[1].ids, 2)
-check("stacked column represented by topmost", stacked[1].rep, 1)
+check("stacked column is anchored by the topmost", stacked[1].anchor, 1)
+check("stacked layout is anchored", M.anchored(stacked), true)
 
--- [A][B] over a full-width C: C straddles the A|B boundary.
-local ragged = M.columns(boxes({ { 13, 39, 1719 }, { 1748, 39, 1679 }, { 13, 760, 3414 } }))
-check("ragged layout is NOT decomposable", M.decomposable(ragged), false)
+-- The case this rule exists for. A | B | C, where C is split into D over E and
+-- E is split into F | G. Nesting must not add columns: the row is A | B | C.
+local NESTED = { { 13, 39, 1120 }, { 1159, 39, 1120 }, { 2305, 39, 1122 }, { 2305, 760, 548 }, { 2879, 760, 548 } }
+local nested = M.columns(boxes(NESTED))
+check("nested column does not split the row", #nested, 3)
+check("nested row reads A | B | C", widths_of(NESTED), { 1120, 1120, 1122 })
+check("nested column holds all three windows", #nested[3].ids, 3)
+check("nested column is anchored by the spanning member", nested[3].anchor, 3)
+check("nested layout is anchored", M.anchored(nested), true)
+
+-- The same column with the nested half on TOP. The anchor is the member that
+-- spans the column, not the topmost one -- picking the topmost here would aim
+-- the resize at the F | G boundary and the column would never reach its target.
+local FLIPPED = { { 13, 39, 1120 }, { 1159, 39, 1120 }, { 2305, 760, 1122 }, { 2305, 39, 548 }, { 2879, 39, 548 } }
+local flipped = M.columns(boxes(FLIPPED))
+check("a flipped nested column reads the same", widths_of(FLIPPED), { 1120, 1120, 1122 })
+check("anchor spans the column, is not merely topmost", flipped[3].anchor, 3)
+
+-- Deeper nesting changes nothing: the rule never looks inside a column.
+local DEEP = { { 13, 39, 1120 }, { 1159, 39, 1120 }, { 2305, 39, 1122 }, { 2305, 760, 548 }, { 2879, 760, 270 }, { 3175, 760, 252 } }
+check("depth is never inspected", widths_of(DEEP), { 1120, 1120, 1122 })
+
+-- [A][B] over a full-width C: C crosses the A|B boundary, so there is no
+-- boundary there and the whole lot is one column. One column is a no-op.
+local straddled = M.columns(boxes({ { 13, 39, 1719 }, { 1758, 39, 1669 }, { 13, 760, 3414 } }))
+check("a straddling window leaves 1 column", #straddled, 1)
+check("the straddling window is the anchor", straddled[1].anchor, 3)
+
+-- Split top and bottom first, then each half side by side at a different ratio:
+-- the four windows chain-overlap into one interval that none of them spans.
+local BLOB = { { 13, 39, 800 }, { 839, 39, 1200 }, { 2065, 39, 1362 }, { 839, 760, 700 }, { 1565, 760, 1862 } }
+local blob = M.columns(boxes(BLOB))
+check("a chain-overlap blob is one column beside X", #blob, 2)
+check("the blob has no anchor", blob[2].anchor, nil)
+check("a row with an anchorless column is refused", M.anchored(blob), false)
 
 -- A single full-screen window, and a pure vertical stack, are both one column.
 check("lone window -> 1 column", #M.columns(boxes({ { 13, 39, 3414 } })), 1)
 check("pure vertical stack -> 1 column", #M.columns(boxes({ { 13, 39, 3414 }, { 13, 750, 3414 } })), 1)
+
+-- Adjacent columns must not merge on the pixel or two of slack the tolerance
+-- allows for borders. The real gap between two tiled windows here is 26px.
+check("touching columns do not merge", #M.columns(boxes({ { 0, 39, 1720 }, { 1720, 39, 1720 } })), 2)
+check("columns overlapping within tolerance do not merge", #M.columns(boxes({ { 0, 39, 1725 }, { 1720, 39, 1720 } })), 2)
+check("columns overlapping past tolerance do merge", #M.columns(boxes({ { 0, 39, 1740 }, { 1720, 39, 1720 } })), 1)
 
 -- ---------------------------------------------------------------------------
 -- Chords

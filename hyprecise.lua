@@ -27,9 +27,20 @@
 -- Hyprecise controls the WIDTH of tiled columns, and only the width. No
 -- dispatch it issues ever changes a window's height.
 --
--- The workspace is read as a row of columns (windows sharing an x-interval).
--- Resizing moves the focused column onto the next stop of a "ladder" of widths,
--- and the remaining columns split what is left over EQUALLY.
+-- The workspace is read as a row of columns. A column is a maximal x-interval
+-- that no window crosses: windows whose x-intervals overlap belong to the same
+-- column, however deeply the layout engine has subdivided it. So a column
+-- holding a nested tree of splits is one column, exactly as a lone window is,
+-- and hyprecise never looks inside one. Resizing moves the focused column onto
+-- the next stop of a "ladder" of widths, and the remaining columns split what
+-- is left over EQUALLY.
+--
+-- Every resize is aimed at its column's ANCHOR: the member spanning the whole
+-- column. A window that spans its column has no side-by-side split above it
+-- inside the column, so the first such split the layout engine walks up to is
+-- the column's own outer boundary -- which is what moves the boundary between
+-- two columns rather than one nested inside them. A column with no anchor
+-- cannot be resized, and the keypress is abandoned.
 --
 -- Direction is expressed in screen space, not in grow/shrink terms: `right`
 -- moves the focused column's RIGHT boundary rightward. For every column but the
@@ -42,7 +53,7 @@
 -- the monitor's available width; where those stops sit follows from the width
 -- the columns actually share out.
 --
--- The pure decision logic (`row_windows`, `columns`, `decomposable`,
+-- The pure decision logic (`row_windows`, `columns`, `anchored`,
 -- `granularity`, `base_ladder`, `build_ladder`, `plan`, `step`, `chords`) has
 -- no Hyprland dependency and is exercised by tests/hyprecise_spec.lua under
 -- plain `lua`.
@@ -123,32 +134,32 @@ end
 -- Row membership (pure)
 -- --------------------------------------------------------------------------
 
---- The tiled members of the row, or nil when the row cannot be trusted.
+--- The tiled members of the row: the focused window's own monitor and
+--- workspace, and nothing else.
 ---
 --- `scope` is the monitor and workspace the focused window belongs to. A
 --- Hyprland workspace lives on exactly one monitor, so every window handed here
---- should already be in scope; one that is not means this reading of the layout
---- is wrong. It would be bucketed into a column of its own -- a window on the
---- next monitor along has an x beyond this monitor's right edge, so it becomes a
---- phantom rightmost column -- and the real windows would be shrunk to make room
---- for it. So a violation abandons the keypress rather than quietly dropping the
---- offender.
+--- should already be in scope; one that is not is not part of this row and takes
+--- no part in the reckoning. Columns are read from x-intervals alone, so an
+--- out-of-scope window would otherwise be read as a real one -- a window on the
+--- next monitor along has an x beyond this monitor's right edge and becomes a
+--- phantom rightmost column, and the real windows get shrunk to make room for
+--- it. Dropping it removes that danger without making the chord dead.
 ---
 --- Windows excluded for the ordinary reasons -- unmapped, hidden, floating,
---- fullscreen -- were never part of the row and never trigger that: a floating
---- scratchpad from elsewhere is simply not a column.
+--- fullscreen -- were never part of the row either: a floating scratchpad is
+--- simply not a column, wherever it lives.
 --- @param windows table array of HL.Window
 --- @param scope table { monitor = id, workspace = id }
---- @return table|nil
+--- @return table
 function M.row_windows(windows, scope)
   local out = {}
   for _, w in ipairs(windows or {}) do
     if w.mapped and not w.hidden and not w.floating and (w.fullscreen or 0) == 0 then
       local m, ws = w.monitor, w.workspace
-      if not m or not ws or m.id ~= scope.monitor or ws.id ~= scope.workspace then
-        return nil
+      if m and ws and m.id == scope.monitor and ws.id == scope.workspace then
+        out[#out + 1] = w
       end
-      out[#out + 1] = w
     end
   end
   return out
@@ -158,47 +169,81 @@ end
 -- Columns (pure)
 -- --------------------------------------------------------------------------
 
---- Bucket boxes into columns by x-interval.
+--- Read the boxes as a row of columns.
+---
+--- A column is a maximal x-interval that no window crosses. Sorting by left
+--- edge and sweeping left to right finds them in one pass: a box starting
+--- before the running interval ends crosses no boundary, so it joins the column
+--- and may extend it; anything else begins a new column past a boundary nobody
+--- occupies.
+---
+--- That is the whole of hyprecise's dealing with nested layouts, and it deals
+--- with them by not looking. A column split into a tree of windows is one
+--- column because its members overlap each other, exactly as a plain vertical
+--- stack is one column because its members share an x-interval. Neither the
+--- depth of the tree nor the shape of it is ever inspected.
+---
+--- Each column also gets its ANCHOR: the member spanning the whole interval,
+--- ties going to the topmost. It is the one window whose resize is guaranteed
+--- to move the column's own boundary rather than one inside it, because
+--- spanning the column means having no side-by-side split above it within the
+--- column. A column may have none -- see `M.anchored`.
+---
 --- @param boxes table array of { x, y, w, id }
---- @param tol number px slack
+--- @param tol number px slack; boxes must overlap by more than this to join
 --- @return table array of columns, sorted left to right
 function M.columns(boxes, tol)
   tol = tol or DEFAULTS.column_tolerance
-  local cols = {}
-  for _, b in ipairs(boxes) do
-    local found
-    for _, c in ipairs(cols) do
-      if math.abs(c.x - b.x) <= tol and math.abs(c.w - b.w) <= tol then
-        found = c
-        break
-      end
-    end
-    if found then
-      found.ids[#found.ids + 1] = b.id
-      if b.y < found.top then
-        found.top = b.y
-        found.rep = b.id
-      end
-    else
-      cols[#cols + 1] = { x = b.x, w = b.w, top = b.y, rep = b.id, ids = { b.id } }
-    end
+
+  local sorted = {}
+  for i, b in ipairs(boxes) do
+    sorted[i] = b
   end
-  table.sort(cols, function(a, b)
+  table.sort(sorted, function(a, b)
     if a.x ~= b.x then
       return a.x < b.x
     end
-    return a.w < b.w
+    return a.w > b.w
   end)
+
+  local cols = {}
+  for _, b in ipairs(sorted) do
+    local c = cols[#cols]
+    if c and b.x < c.x + c.w - tol then
+      local right = math.max(c.x + c.w, b.x + b.w)
+      c.w = right - c.x
+      c.members[#c.members + 1] = b
+    else
+      cols[#cols + 1] = { x = b.x, w = b.w, members = { b } }
+    end
+  end
+
+  for _, c in ipairs(cols) do
+    local anchor, anchor_y
+    c.ids = {}
+    for _, b in ipairs(c.members) do
+      c.ids[#c.ids + 1] = b.id
+      local spans = b.x <= c.x + tol and b.x + b.w >= c.x + c.w - tol
+      if spans and (anchor == nil or b.y < anchor_y) then
+        anchor, anchor_y = b.id, b.y
+      end
+    end
+    c.anchor = anchor
+    c.members = nil
+  end
   return cols
 end
 
---- True when the columns tile the row without overlapping.
---- A window spanning two columns (e.g. [A][B] over a full-width C) produces
---- overlapping buckets and is rejected here as a "ragged" layout.
-function M.decomposable(cols, tol)
-  tol = tol or DEFAULTS.column_tolerance
-  for i = 1, #cols - 1 do
-    if cols[i].x + cols[i].w > cols[i + 1].x + tol then
+--- True when every column has an anchor, and so can be resized at all.
+---
+--- A column without one is a chain of windows that overlap each other without
+--- any of them covering the lot -- a row split top and bottom first, then each
+--- half split side by side at a different ratio, produces exactly that. There
+--- is no window whose resize is known to move the outer boundary, so rather
+--- than move an inner one and call it done, the keypress is abandoned.
+function M.anchored(cols)
+  for _, c in ipairs(cols) do
+    if not c.anchor then
       return false
     end
   end
@@ -444,7 +489,9 @@ local function resize(win, delta)
 end
 
 --- Walk the columns left to right, nudging each onto its target and re-reading
---- geometry as we go. A dwindle resize is tree-relative, so one sweep only
+--- geometry as we go. Each nudge is aimed at the column's anchor, which spans
+--- the column -- so its width IS the column's width, and moving it moves the
+--- column's own boundary. A dwindle resize is tree-relative, so one sweep only
 --- converges for right-nested trees; repeat until everything is on target.
 local function apply(cols, targets, opts)
   for _ = 1, opts.max_passes do
@@ -468,33 +515,6 @@ local function apply(cols, targets, opts)
   return false
 end
 
---- Ragged layouts have no column decomposition, so there is nothing to
---- distribute equally. Step the focused window itself and let dwindle spread
---- the difference however its tree says.
-local function ragged(win, monitor, direction, opts)
-  -- A ragged row has no width to measure: its windows overlap in x, so summing
-  -- them overcounts -- on the README's own example, to about twice the screen.
-  -- The available width is the only well-defined stand-in, so on a ragged layout
-  -- the stops are fractions of the screen rather than of the row.
-  local avail = available_width(monitor)
-  local ladder = M.base_ladder(avail, M.granularity(avail))
-  if #ladder == 0 then
-    return
-  end
-  local snap = snap_of(avail, opts)
-  local current = win.size.x
-  local reserved = monitor.reserved or {}
-  local monitor_right = (monitor.x or 0) + monitor_width(monitor) - (reserved.right or 0)
-  local is_last = (win.at.x + current) >= (monitor_right - 3 * opts.column_tolerance)
-  local fair = ladder[idiv(#ladder + 1, 2)]
-
-  local target = M.step(ladder, current, fair, direction, is_last, snap, opts.loop)
-  if not target or math.abs(target - current) <= opts.converge_tolerance then
-    return
-  end
-  resize(win, target - current)
-end
-
 --- Entry point. Silent on every no-op path: this runs on a keybind, so there
 --- is nowhere for a message to go.
 local function run(direction, user_opts)
@@ -513,9 +533,8 @@ local function run(direction, user_opts)
   end
 
   -- Everything hyprecise reads or moves belongs to one row: the focused window's
-  -- workspace on the focused window's monitor. `row_windows` returns nil if that
-  -- turns out not to hold, and a keypress that cannot trust its own reading of
-  -- the layout does nothing.
+  -- workspace on the focused window's monitor. Anything else is dropped, so the
+  -- columns it goes on to read are this monitor's and no others'.
   local scope = { monitor = monitor.id, workspace = ws.id }
   local wins = tiled_windows(ws, scope)
   if not wins or #wins < 2 then
@@ -529,19 +548,22 @@ local function run(direction, user_opts)
 
   local cols = M.columns(boxes, opts.column_tolerance)
   if #cols < 2 then
-    -- One column: a lone window or a pure vertical stack. There is no vertical
-    -- boundary to move and heights are out of scope, so there is nothing to do.
+    -- One column: a lone window, a vertical stack, or a workspace subdivided
+    -- entirely inside itself. There is no boundary between columns to move and
+    -- heights are out of scope, so there is nothing to do.
     return
   end
 
-  if not M.decomposable(cols, opts.column_tolerance) then
-    return ragged(win, monitor, direction, opts)
+  if not M.anchored(cols) then
+    return
   end
 
   local widths, focused = {}, nil
   for i, c in ipairs(cols) do
     widths[i] = c.w
-    c.win = wins[c.rep]
+    c.win = wins[c.anchor]
+    -- The focused window may be nested arbitrarily deep; what matters is only
+    -- which column holds it. Its own geometry is never used.
     for _, id in ipairs(c.ids) do
       if wins[id].address == win.address then
         focused = i

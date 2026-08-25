@@ -117,14 +117,42 @@ move, so `Right` moves its left edge rightward instead — the column shrinks.
 way from either focus position, and it is deliberate, not a bug.
 
 Every path is silent. Nothing happens on a floating or fullscreen window, on a
-workspace with fewer than two tiled windows, on a single column (a lone window or
-a pure vertical stack has no vertical boundary to move), or when the requested
-move would be smaller than the convergence tolerance.
+workspace with fewer than two tiled windows, on a single column, or when the
+requested move would be smaller than the convergence tolerance.
 
 A keypress only ever reads or moves windows on the focused window's own
-workspace, on the focused window's own monitor. If a tiled window outside that
-row ever turns up, hyprecise abandons the keypress rather than resize on a
-reading of the layout it cannot trust.
+workspace, on the focused window's own monitor. Anything else is dropped before
+the layout is read, so every column a keypress touches is on the current monitor
+by construction.
+
+## Nested windows are still one column
+
+A column is a maximal x-interval that **no window crosses**. Split a column into
+a stack, split one of those into a pair, split that pair again — it is still one
+column, and hyprecise still resizes the row it belongs to. It never looks inside.
+
+```
+   ┌────────────┬────────────┬────────────┐
+   │            │            │     D      │
+   │     A      │     B      ├──────┬─────┤
+   │            │            │  F   │  G  │
+   └────────────┴────────────┴──────┴─────┘
+
+   the row is  A │ B │ C  — three columns, always
+```
+
+Focus `A`, `B`, `D`, `F` or `G`: the chord moves the boundary of the column that
+holds the focused window, and the splits *inside* that column keep their
+proportions. Pressing `Right` from `F`, from `G` and from `D` all do the same
+thing, because all three are in column `C`.
+
+Two layouts have no row to read, and hyprecise stays silent on both. A window
+that straddles what would be its neighbours' boundary (`[A][B]` over a full-width
+`C`) leaves one column, and one column has no boundary to move. And a column with
+no member spanning it — a row split top and bottom first, then each half split
+side by side at a different ratio — has no window whose resize is known to move
+the outer boundary, so the keypress is abandoned rather than aimed at an inner
+one.
 
 ## The ladder follows the monitor
 
@@ -167,7 +195,7 @@ change between releases without a major version bump.
 | Option | Default | Meaning |
 |---|---|---|
 | `snap` | `nil` | Tolerance for "already on this stop". `nil` means `max(16, available width ÷ 100)`. Every other epsilon derives from it. |
-| `column_tolerance` | `8` | Pixel slack when bucketing windows into columns. Raise it if gaps or borders cause windows in one column to be read as two. |
+| `column_tolerance` | `8` | How far two windows' x-intervals must overlap before they count as one column. Raise it if gaps or borders cause windows in one column to be read as two. |
 | `converge_tolerance` | `4` | Below this many pixels of error, a column counts as on target. |
 | `max_passes` | `4` | Sweeps attempted before giving up. A dwindle resize is tree-relative, so one pass does not always converge. |
 
@@ -191,20 +219,21 @@ the suite runs anywhere:
 lua tests/hyprecise_spec.lua
 ```
 
-80 assertions covering granularity across monitor sizes, ladder construction,
+99 assertions covering granularity across monitor sizes, ladder construction,
 stepping, redistribution, width conservation, the floor, row membership
-(including the abort on an out-of-scope window), column detection (including
-vertical stacks and ragged layouts), and chord derivation. CI runs them on every
+(including the dropping of out-of-scope windows), column detection (vertical
+stacks, nested trees at several depths, straddling windows, and columns with no
+anchor), and chord derivation. CI runs them on every
 push and pull request.
 
 ## How it works
 
 The design rationale lives in the header comment of
 [`hyprecise.lua`](hyprecise.lua) — the ladder, the equal split, the screen-space
-direction rule, and why ragged layouts are handled separately.
+direction rule, and why a resize is aimed at a column's anchor.
 [`CONTEXT.md`](CONTEXT.md) defines the vocabulary those comments use: *column*,
-*row*, *available width*, *row width*, *stop*, *slice*, *ladder*, *granularity*,
-*fair share*, *boundary*, *chord*, *decomposable*, *ragged*, *snap*. [`docs/adr/`](docs/adr) records the decisions behind the shape of the
+*anchor*, *row*, *available width*, *row width*, *stop*, *slice*, *ladder*,
+*granularity*, *fair share*, *boundary*, *chord*, *snap*. [`docs/adr/`](docs/adr) records the decisions behind the shape of the
 thing.
 
 ## License

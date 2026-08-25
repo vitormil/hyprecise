@@ -5,18 +5,28 @@ of this is implemented is a question for the source.
 
 ## Column
 
-A vertical slice of the workspace: every tiled window sharing the same
-x-interval. A column may hold a single window or a vertical stack of several; the
-stack is still one column, because it presents one pair of vertical edges to its
-neighbours. Columns are what hyprecise resizes. Windows are not.
+A vertical slice of the workspace: a maximal x-interval that no window crosses. A
+column may hold a single window, a vertical stack of several, or a whole tree of
+splits nested to any depth; it is still one column, because it presents one pair
+of vertical edges to its neighbours. What a column contains is never looked at.
+Columns are what hyprecise resizes. Windows are not.
+
+## Anchor
+
+The member of a column whose x-interval spans the whole column. A resize is
+always aimed at the anchor, because a window that spans its column has no
+boundary of its own inside the column — so the first boundary above it is the
+column's, and moving it moves the column rather than something nested within.
+Ties go to the topmost. A column with no anchor cannot be resized, and a row
+containing one is left alone.
 
 ## Row
 
 The full set of columns on one workspace of one monitor, read left to right.
 Hyprecise reasons about exactly one row at a time — the focused window's — and
 never reads or moves a window outside it. A workspace lives on a single monitor,
-so the two halves of that boundary normally coincide; where they are ever seen to
-disagree the row is not trustworthy and hyprecise does nothing.
+so the two halves of that boundary normally coincide; a window found on neither
+is not part of the row and takes no part in the reckoning.
 
 ## Available width
 
@@ -33,7 +43,9 @@ fractions of this, so every stop names a width a column can really have.
 ## Boundary
 
 A vertical edge shared between two adjacent columns, or between a column and the
-screen. Every resize is the movement of exactly one boundary. Naming the boundary
+screen. An x-coordinate is a boundary exactly when no window crosses it, which is
+what makes a column's contents irrelevant to where its edges are. Every resize is
+the movement of exactly one boundary. Naming the boundary
 is what lets a direction be expressed in screen space ("move the right edge
 rightward") instead of in intent ("grow") — which is ambiguous for a column that
 has no neighbour on the side you pressed.
@@ -83,16 +95,3 @@ focused column can never squeeze a neighbour into uselessness.
 
 The tolerance below which two widths count as the same stop. It is what keeps a
 keypress from resolving to a move too small to see.
-
-## Decomposable
-
-A row is decomposable when its columns tile it side by side without overlapping —
-when the layout really is a row of columns, and width can be shared out among
-them.
-
-## Ragged
-
-A layout that is not decomposable: some window straddles a boundary its
-neighbours observe, so no single left-to-right reading of the row exists. There
-is no set of columns to distribute width across, and hyprecise falls back to
-moving only the focused window.
