@@ -421,5 +421,202 @@ check("partial map leaves up unbound", M.chords(horizontal).up, nil)
 check("unusable keys bind nothing", chord_count(42), 0)
 check("stray direction keys are ignored", chord_count({ sideways = "SUPER + S" }), 0)
 
+-- ---------------------------------------------------------------------------
+-- Applying a plan -- the half that issues dispatches
+-- ---------------------------------------------------------------------------
+--
+-- A plan is only worth as much as the dispatches that carry it out, and those
+-- are only correct in terms of how the layout engine replies. tests/dwindle.lua
+-- supplies the replies; hyprecise's real `run` is driven against it, so what is
+-- checked here is the shipped code path and not a copy of it.
+--
+-- The row a chord lands on is compared against the plan hyprecise itself made
+-- for that row, never against a number typed in here: the question these ask is
+-- whether hyprecise does what it decided to do.
+
+local D = dofile(here .. "/dwindle.lua")
+
+local function leaf(name)
+  return { leaf = name }
+end
+local function side(a, b)
+  return { h = true, ratio = 1.0, a, b }
+end
+local function stack(a, b)
+  return { h = false, ratio = 1.0, a, b }
+end
+
+--- Press a chord on a tree and say how far the row ended from the plan.
+--- @return number worst error in px, table row, table|nil plan
+local function press(root, focus, direction)
+  D.equalise(root)
+  local plan = D.plan(M, root, focus, direction)
+  local result = D.press(M, root, focus, direction)
+  if not plan then
+    return 0, result.after, nil
+  end
+  local worst = 0
+  for i, want in ipairs(plan.targets) do
+    worst = math.max(worst, math.abs((result.after[i] or 0) - want))
+  end
+  return worst, result.after, plan
+end
+
+--- True when the chord landed the row on the plan, within the tolerance
+--- hyprecise itself calls "on target".
+local function lands(root, focus, direction)
+  local worst, _, plan = press(root, focus, direction)
+  return plan ~= nil and worst <= 8
+end
+
+--- True when the chord changed nothing at all -- which is what a refusal has to
+--- look like, the nudges it asks with included.
+local function untouched(root, focus, direction)
+  D.equalise(root)
+  local result = D.press(M, root, focus, direction)
+  if #result.before ~= #result.after then
+    return false
+  end
+  for i, w in ipairs(result.before) do
+    if w ~= result.after[i] then
+      return false
+    end
+  end
+  return true
+end
+
+--- The four chords from every focus position, over one tree.
+local function every_chord(make, predicate)
+  local n = #D.leaves((function()
+    local r = make()
+    D.recalc(r)
+    return r
+  end)())
+  for focus = 1, n do
+    for _, dir in ipairs({ "left", "right", "up", "down" }) do
+      local root = make()
+      D.equalise(root)
+      if not predicate(root, D.leaves(root)[focus], dir) then
+        return false, string.format("focus %d, %s", focus, dir)
+      end
+    end
+  end
+  return true
+end
+
+-- The model has to reproduce the layout engine before anything built on it
+-- means a thing. A dispatch moves the first side-by-side split above the window
+-- RIGHTWARD, so it widens a window on the left of that split and NARROWS one on
+-- the right -- which is the fact the whole boundary reading exists for.
+local A, B, C = leaf("A"), leaf("B"), leaf("C")
+local nested = side(side(A, C), B) -- A and C share a split; B is the outer sibling
+D.equalise(nested)
+check("model: a row of three reads as three columns", #D.columns(M, nested), 3)
+check("model: the left column drives its RIGHT edge", D.governs(A), "right")
+check("model: the middle column drives its LEFT edge", D.governs(C), "left")
+check("model: the last column drives its LEFT edge", D.governs(B), "left")
+
+local widths_before = D.columns(M, nested)
+D.resize(nested, C, 100)
+local widths_after = D.columns(M, nested)
+check("model: +100px on the middle column NARROWS it by 100", widths_after[2], widths_before[2] - 100)
+check("model: and widens its left neighbour by 100", widths_after[1], widths_before[1] + 100)
+check("model: while the row shares out the same total", widths_after[1] + widths_after[2] + widths_after[3], widths_before[1] + widths_before[2] + widths_before[3])
+
+-- Two windows: one boundary, and it is the only thing either of them can move.
+check("N=2 lands on the plan from either focus", every_chord(function()
+  return side(leaf("A"), leaf("B"))
+end, lands), true)
+
+-- Three columns, both ways the layout engine can build them. The spiral is what
+-- opening windows one after another gives; the other is what moving one in from
+-- elsewhere gives, and it is the one where the middle column's dispatch is
+-- inverted.
+check("N=3 spiral lands on the plan", every_chord(function()
+  return side(leaf("A"), side(leaf("B"), leaf("C")))
+end, lands), true)
+check("N=3 with the pair on the left lands on the plan", every_chord(function()
+  return side(side(leaf("A"), leaf("B")), leaf("C"))
+end, lands), true)
+
+-- Four columns, every shape the engine can build them in.
+check("N=4 spiral lands on the plan", every_chord(function()
+  return side(leaf("A"), side(leaf("B"), side(leaf("C"), leaf("E"))))
+end, lands), true)
+check("N=4 pair nested right lands on the plan", every_chord(function()
+  return side(leaf("A"), side(side(leaf("B"), leaf("C")), leaf("E")))
+end, lands), true)
+check("N=4 pair nested left lands on the plan", every_chord(function()
+  return side(side(leaf("A"), side(leaf("B"), leaf("C"))), leaf("E"))
+end, lands), true)
+check("N=4 leaning fully left lands on the plan", every_chord(function()
+  return side(side(side(leaf("A"), leaf("B")), leaf("C")), leaf("E"))
+end, lands), true)
+
+-- Nesting inside a column changes nothing: the column is resized, not its
+-- contents, and it reaches its target from every window inside it.
+check("a column holding a stack lands on the plan", every_chord(function()
+  return side(leaf("A"), side(stack(leaf("B"), leaf("C")), leaf("E")))
+end, lands), true)
+check("a column holding a tree lands on the plan", every_chord(function()
+  return side(side(leaf("A"), stack(leaf("B"), side(leaf("C"), leaf("E")))), leaf("F"))
+end, lands), true)
+
+-- A boundary whose split has a side-by-side split on BOTH sides is nobody's
+-- nearest one, so no dispatch can move it and the row cannot be arranged as
+-- planned. Refusing is the only honest answer, and it has to leave no trace.
+check("a boundary no window can move is refused", every_chord(function()
+  return side(side(leaf("A"), leaf("B")), side(leaf("C"), leaf("E")))
+end, untouched), true)
+
+-- Two side-by-side splits stacked at the same ratio present exactly the edges a
+-- two-column row would, and come apart the moment either half moves. Reading it
+-- as columns and resizing them would ruin the grid AND leave a row that reads as
+-- one column, so every later keypress would be dead.
+check("a grid is not mistaken for columns", every_chord(function()
+  return stack(side(leaf("A"), leaf("B")), side(leaf("C"), leaf("E")))
+end, untouched), true)
+
+-- Whatever a chord does, it never leaves a column narrower than the layout could
+-- have been asked for. This is the failure the boundary reading exists to
+-- prevent: a dispatch applied with the wrong sign collapses a column to a few
+-- dozen pixels and then oscillates until the passes run out.
+local no_collapse = true
+for _, make in ipairs({
+  function() return side(side(leaf("A"), leaf("B")), leaf("C")) end,
+  function() return side(side(leaf("A"), side(leaf("B"), leaf("C"))), leaf("E")) end,
+  function() return side(side(side(leaf("A"), leaf("B")), leaf("C")), leaf("E")) end,
+  function() return side(leaf("A"), side(side(leaf("B"), leaf("C")), leaf("E"))) end,
+}) do
+  local ok = every_chord(make, function(root, focus, dir)
+    local _, row = press(root, focus, dir)
+    for _, w in ipairs(row) do
+      if w < 200 then
+        return false
+      end
+    end
+    return true
+  end)
+  no_collapse = no_collapse and ok
+end
+check("no chord collapses a column", no_collapse, true)
+
+-- A row already far from any stop still lands on one; the ladder is absolute,
+-- not relative to where the row happened to be.
+local lopsided = side(side(leaf("A"), leaf("B")), leaf("C"))
+D.recalc(lopsided)
+lopsided.ratio, lopsided[1].ratio = 1.7, 0.4
+D.recalc(lopsided)
+local worst = select(1, (function()
+  local plan = D.plan(M, lopsided, D.leaves(lopsided)[1], "right")
+  local result = D.press(M, lopsided, D.leaves(lopsided)[1], "right")
+  local w = 0
+  for i, want in ipairs(plan.targets) do
+    w = math.max(w, math.abs((result.after[i] or 0) - want))
+  end
+  return w
+end)())
+check("a lopsided row still lands on the plan", worst <= 8, true)
+
 print(string.format("\n%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

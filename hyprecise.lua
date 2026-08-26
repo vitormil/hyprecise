@@ -42,6 +42,15 @@
 -- two columns rather than one nested inside them. A column with no anchor
 -- cannot be resized, and the keypress is abandoned.
 --
+-- What a dispatch does with that split is move it RIGHTWARD by the delta,
+-- whichever side of it the anchor sits on. So the same dispatch widens a column
+-- whose anchor is the split's left half and narrows one whose anchor is its
+-- right half, and nothing in the geometry says which a column is. Hyprecise
+-- therefore asks, by nudging each column and watching where its left edge went,
+-- and then works in BOUNDARIES rather than widths -- because a boundary is what
+-- a dispatch moves, and naming it makes the delta mean one thing no matter
+-- which of its two columns is asked.
+--
 -- Direction is expressed in screen space, not in grow/shrink terms: `right`
 -- moves the focused column's RIGHT boundary rightward. For every column but the
 -- last that boundary is movable, so the column grows. For the last column the
@@ -56,7 +65,10 @@
 -- The pure decision logic (`row_windows`, `columns`, `anchored`,
 -- `granularity`, `base_ladder`, `build_ladder`, `plan`, `step`, `chords`) has
 -- no Hyprland dependency and is exercised by tests/hyprecise_spec.lua under
--- plain `lua`.
+-- plain `lua`. `run` itself is exercised there too, against a model of the
+-- dwindle layout in tests/dwindle.lua: the half of hyprecise that issues
+-- dispatches is only correct in terms of how the layout engine answers them, so
+-- the answers are modelled rather than assumed.
 
 local M = {}
 
@@ -488,22 +500,154 @@ local function resize(win, delta)
   }))
 end
 
---- Walk the columns left to right, nudging each onto its target and re-reading
---- geometry as we go. Each nudge is aimed at the column's anchor, which spans
---- the column -- so its width IS the column's width, and moving it moves the
---- column's own boundary. A dwindle resize is tree-relative, so one sweep only
---- converges for right-nested trees; repeat until everything is on target.
-local function apply(cols, targets, opts)
-  for _ = 1, opts.max_passes do
-    for i = 1, #cols - 1 do
-      local delta = targets[i] - cols[i].win.size.x
+--- The row as it stands, read back from live geometry.
+local function read_row(wins, opts)
+  local boxes = {}
+  for i, w in ipairs(wins) do
+    boxes[i] = { x = w.at.x, y = w.at.y, w = w.size.x, id = i }
+  end
+  return M.columns(boxes, opts.column_tolerance)
+end
+
+--- Ask one column two questions at once, by nudging it and looking at what the
+--- whole row did. Returns the edge that moved, and whether the row survived
+--- being asked; the nudge is undone before either is reported.
+---
+--- WHICH EDGE. A dispatch moves the first side-by-side split above the anchor.
+--- Everything between the anchor and that split is a top/bottom split, which
+--- leaves the x-interval alone, so the split IS one of the column's own edges --
+--- but which of the two depends on the side of it the anchor sits on, and no
+--- amount of geometry says. Where the column's left edge went does.
+---
+--- WHETHER IT IS A COLUMN AT ALL. An x-interval no window crosses need not be a
+--- thing that moves as one. Two side-by-side splits stacked one above the other
+--- at the same ratio -- a grid -- present exactly the edges a single column
+--- would, and come apart the moment either half is moved. A real column takes
+--- its whole row with it, so the row still reads as the same columns afterwards
+--- and still shares out the same total width.
+local function ask(wins, win, nudge, columns, total, opts)
+  local x0, w0 = win.at.x, win.size.x
+  resize(win, nudge)
+
+  local left = win.at.x ~= x0
+  local answered = left or win.size.x ~= w0
+  local after = read_row(wins, opts)
+  local sum = 0
+  for _, c in ipairs(after) do
+    sum = sum + c.w
+  end
+  local intact = #after == columns and math.abs(sum - total) <= 1
+
+  resize(win, -nudge)
+  return answered and (left and "left" or "right") or nil, intact
+end
+
+--- Which edge every column drives. Nil when the row does not survive being
+--- asked, which is the grid above and anything else whose columns are an
+--- accident of alignment rather than a property of the layout.
+---
+--- The nudge has to be bigger than the slack columns are bucketed with,
+--- otherwise a row that has come apart still reads as the row it was.
+local function survey(wins, cols, opts)
+  local nudge = 2 * opts.column_tolerance + 1
+  local total = 0
+  for _, c in ipairs(cols) do
+    total = total + c.w
+  end
+
+  local edge = {}
+  for i = 1, #cols do
+    local answer, intact = ask(wins, cols[i].win, nudge, #cols, total, opts)
+    if not intact then
+      return nil
+    end
+    if not answer then
+      -- A split already at the layout engine's ratio limit will not go further
+      -- one way. Ask the other way before concluding anything.
+      answer, intact = ask(wins, cols[i].win, -nudge, #cols, total, opts)
+      if not intact or not answer then
+        return nil
+      end
+    end
+    edge[i] = answer
+  end
+  return edge
+end
+
+--- Pair every boundary with the column that moves it, so that a delta means one
+--- thing throughout: move THIS boundary rightward by that many pixels,
+--- whichever of its two columns is asked.
+---
+--- Nil when some boundary belongs to no column. A split lies strictly inside the
+--- box it divides, so the first column's split can only be its right edge and
+--- the last column's only its left -- but in between, two columns can both drive
+--- the boundary they share and leave another with nobody, which is what a split
+--- whose halves are themselves side-by-side splits looks like from here. Such a
+--- boundary cannot be moved at all, so the row cannot be arranged as planned and
+--- the keypress is abandoned rather than half-served.
+local function drivers(wins, cols, opts)
+  local edge = survey(wins, cols, opts)
+  if not edge then
+    return nil
+  end
+
+  local driver = {}
+  for i = 1, #cols do
+    local boundary = edge[i] == "right" and i or i - 1
+    if boundary >= 1 and boundary <= #cols - 1 and not driver[boundary] then
+      driver[boundary] = cols[i].win
+    end
+  end
+  for j = 1, #cols - 1 do
+    if not driver[j] then
+      return nil
+    end
+  end
+  return driver
+end
+
+--- Walk the boundaries, moving each onto the position the target widths put it
+--- at, and re-reading geometry as we go.
+---
+--- Boundaries rather than columns, because a boundary is what a dispatch moves:
+--- it slides one split rightward by the delta and rescales whatever sits on the
+--- far side of it, however many columns that is. A boundary nearer the root of
+--- the layout tree therefore disturbs the ones below it, so one sweep settles
+--- only the outermost, the next settles the one below that, and the number of
+--- sweeps has to keep up with the number of columns.
+---
+--- A boundary's position is read as the width of everything to the left of it,
+--- which moves pixel for pixel with the boundary because the gaps never change.
+local function apply(wins, cols, targets, opts)
+  local driver = drivers(wins, cols, opts)
+  if not driver then
+    return false
+  end
+
+  local want, running = {}, 0
+  for j = 1, #cols - 1 do
+    running = running + targets[j]
+    want[j] = running
+  end
+
+  local function have(j)
+    local sum = 0
+    for i = 1, j do
+      sum = sum + cols[i].win.size.x
+    end
+    return sum
+  end
+
+  for _ = 1, math.max(opts.max_passes, #cols) do
+    for j = 1, #cols - 1 do
+      local delta = want[j] - have(j)
       if math.abs(delta) > opts.converge_tolerance then
-        resize(cols[i].win, delta)
+        resize(driver[j], delta)
       end
     end
     local worst = 0
-    for i = 1, #cols do
-      local err = math.abs(targets[i] - cols[i].win.size.x)
+    for j = 1, #cols - 1 do
+      local err = math.abs(want[j] - have(j))
       if err > worst then
         worst = err
       end
@@ -585,7 +729,7 @@ local function run(direction, user_opts)
     return
   end
 
-  apply(cols, plan.targets, opts)
+  apply(wins, cols, plan.targets, opts)
 end
 
 M.run = run

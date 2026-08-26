@@ -11,6 +11,59 @@ callable module, and the internals the offline spec reaches for — and so are t
 tuning knobs, which exist to work around how the layout engine reacts to a
 resize and may change in any release.
 
+## [1.0.1] — 2026-08-26
+
+One bug, in the half of hyprecise that had no tests: what a resize dispatch does
+was assumed rather than known. Nothing in the supported surface changes, and on
+the one layout the old code handled the result is byte-identical.
+
+### Fixed
+
+- **A row that is not a right-nested spiral no longer comes apart.** A dispatch
+  does not widen the window it names. It takes the first side-by-side split above
+  that window and moves it RIGHTWARD by the delta, whichever side of the split
+  the window is on — so it widens a window on the left of it and *narrows* one on
+  the right. `apply` assumed the former for every column, which is only true of
+  the tree the dwindle spiral builds when windows are opened one after another.
+  Move a window in from another workspace, or open one while an older window is
+  focused, and the middle column's dispatch is inverted: on a 3440 monitor,
+  `Right` on the middle of `844 | 839 | 1699` asked it to grow by 572px and left
+  it at **69px**, after which the sweep oscillated for all four passes and gave
+  up, leaving the wreck. Every one of the twelve focus-and-direction combinations
+  on that row was wrong; all twelve now land exactly on a ladder stop.
+- **The last column can change width.** The sweep walked columns `1..n-1` and
+  relied on the last one absorbing the remainder. In a left-leaning tree the last
+  boundary is driven only by the last column's own anchor, so that column was
+  pinned: it held the same width across every chord, from every focus.
+- **A grid is no longer mistaken for a row of columns.** Two side-by-side splits
+  stacked one above the other at the same ratio present exactly the edges a
+  single row of columns would, and there is nothing in the geometry to tell them
+  apart. Resizing them split the top row and left the bottom one alone, and the
+  ragged result then read as one column with no anchor — so every later keypress
+  was a silent no-op until the layout was repaired by hand.
+- **A boundary no window can move is refused rather than thrashed at.** A split
+  whose two halves are themselves side-by-side splits is nobody's nearest split,
+  so no dispatch reaches it and the row cannot be arranged as planned. Such a
+  keypress now changes nothing at all instead of half-serving the plan.
+
+### Changed
+
+- **`apply` works in boundaries, not column widths.** A boundary is what a
+  dispatch moves, so naming it makes a delta mean one thing throughout — move
+  *this* boundary rightward by that many pixels — no matter which of its two
+  columns is asked. Which boundary a column drives is not in the geometry, so
+  hyprecise asks: it nudges the column, watches where its left edge went, and
+  undoes the nudge. The same nudge answers whether the column is a column at all,
+  because a real one takes its whole row with it.
+- The number of sweeps keeps up with the number of columns. A boundary nearer the
+  root of the layout tree rescales the ones below it, so one sweep settles only
+  the outermost; `max_passes` is now a floor rather than a fixed four.
+- The offline spec drives the real `run` against a model of the dwindle layout in
+  `tests/dwindle.lua`, transcribed from Hyprland 0.56.2 and calibrated against
+  live geometry. The half of hyprecise that issues dispatches is only correct in
+  terms of how the layout engine answers them, so the answers are modelled rather
+  than assumed: 119 assertions, up from 99, nine of which fail against 1.0.0.
+
 ## [1.0.0] — 2026-08-25
 
 The supported surface is now fixed. Two things a 0.1.0 config could rely on are
@@ -130,5 +183,6 @@ Initial release.
 - Offline spec covering the pure decision core: 46 assertions, no compositor
   required.
 
+[1.0.1]: https://github.com/vitormil/hyprecise/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/vitormil/hyprecise/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/vitormil/hyprecise/releases/tag/v0.1.0

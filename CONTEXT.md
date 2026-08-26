@@ -50,6 +50,29 @@ is what lets a direction be expressed in screen space ("move the right edge
 rightward") instead of in intent ("grow") — which is ambiguous for a column that
 has no neighbour on the side you pressed.
 
+It is also what a dispatch moves, and it moves it rightward by the delta
+whichever side of it the window sits on. So the same dispatch widens one of the
+boundary's two columns and narrows the other, and a delta only means one thing
+once the boundary rather than the column is named.
+
+## Driver
+
+The column whose dispatch moves a given boundary. Each column drives exactly one
+of its two edges, and which one is a property of the layout tree rather than of
+the geometry, so it has to be asked for. Two columns can drive the boundary they
+share, which leaves another with no driver at all; a boundary with no driver
+cannot be moved, so a row containing one is left alone.
+
+## Nudge
+
+The one question hyprecise can ask about a layout it cannot see: move a column a
+little and look at what the row did. Where the column's left edge went names its
+driven boundary; whether the row still reads as the same columns sharing out the
+same total says whether it was a column in the first place, rather than an
+alignment two independent splits happened to share. A nudge is always undone
+before anything else happens, and is larger than the slack columns are bucketed
+with, or a row that has come apart still reads as the row it was.
+
 ## Chord
 
 The key combination that names a direction. Four of them, one per direction, are
