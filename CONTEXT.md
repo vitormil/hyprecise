@@ -95,3 +95,10 @@ focused column can never squeeze a neighbour into uselessness.
 
 The tolerance below which two widths count as the same stop. It is what keeps a
 keypress from resolving to a move too small to see.
+
+## Convergence tolerance
+
+The margin within which a column counts as having arrived at its target width.
+It exists because a resize is asked for rather than commanded — the layout
+engine answers approximately — so "close enough" has to be a number; a keypress
+whose entire requested move falls inside it is abandoned rather than issued.

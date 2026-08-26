@@ -127,10 +127,10 @@ by construction.
 
 A column is a maximal x-interval that **no window crosses**. Split a column into
 a stack, split one of those into a pair, split that pair again — it is still one
-column, and hyprecise still resizes the row it belongs to. It never looks inside.
+column, and hyprecise never looks inside.
 
 ```
-   ┌────────────┬────────────┬────────────┐
+   ┌────────────┬────────────┬─── C ──────┐
    │            │            │     D      │
    │     A      │     B      ├──────┬─────┤
    │            │            │  F   │  G  │
@@ -139,40 +139,28 @@ column, and hyprecise still resizes the row it belongs to. It never looks inside
    the row is  A │ B │ C  — three columns, always
 ```
 
-Focus `A`, `B`, `D`, `F` or `G`: the chord moves the boundary of the column that
-holds the focused window, and the splits *inside* that column keep their
-proportions. Pressing `Right` from `F`, from `G` and from `D` all do the same
-thing, because all three are in column `C`.
+Focus `A`, `B`, `D`, `F` or `G` and the chord moves the boundary of the column
+holding it, the splits inside keeping their proportions — so `Right` does the
+same thing from `D`, `F` and `G`, because all three are column `C`. Two layouts
+have no row to read and stay silent: a window straddling its neighbours'
+boundary leaves a single column, which has no boundary to move; and a column no
+member spans has no window whose resize is known to move the outer edge.
 
-Two layouts have no row to read, and hyprecise stays silent on both. A window
-that straddles what would be its neighbours' boundary (`[A][B]` over a full-width
-`C`) leaves one column, and one column has no boundary to move. And a column with
-no member spanning it — a row split top and bottom first, then each half split
-side by side at a different ratio — has no window whose resize is known to move
-the outer boundary, so the keypress is abandoned rather than aimed at an inner
-one.
+## Breakpoints
 
-## The ladder follows the monitor
+The ladder's shape is not configurable, because there is nothing to get wrong.
+Hyprecise cuts the **available width** — the monitor's logical width, less
+whatever a side bar reserves — into as many equal slices as fit while keeping
+each near 540px. Every multiple of a slice short of the whole is a stop.
 
-There is nothing to configure about the shape of the ladder, because there is
-nothing to get wrong. Hyprecise divides the monitor's **available width** — its
-logical width less anything a side bar reserves — into as many equal *slices* as
-will fit while keeping each one about 540px, the narrowest column still worth
-having. Every multiple of a slice short of the whole is a stop.
-
-| Monitor | Slices | Stops |
-|---|---|---|
-| 1366 | 3 | thirds |
-| 1920 | 4 | quarters |
-| 2560 | 5 | fifths |
-| 3440 | 6 | sixths |
-| 3840 | 7 | sevenths |
-| 5120 | 8 | eighths |
-
-The stops themselves are fractions of the **row** — the widths your windows
-actually add up to — not of the screen, so a stop always names a width a column
-can really have. On a 3440 monitor with 10px gaps and 3px borders the row is
-3398, and the half stop is 1699 rather than 1720.
+| Monitor | Available width | Slices | Stops (of the row) |
+|---|---|---|---|
+| 1366 | up to 1889 | 3 | thirds |
+| 1920 | 1890–2429 | 4 | quarters |
+| 2560 | 2430–2969 | 5 | fifths |
+| 3440 | 2970–3509 | 6 | sixths |
+| 3840 | 3510–4049 | 7 | sevenths |
+| 5120 | 4050 and up | 8 | eighths |
 
 ## Options
 
@@ -185,18 +173,8 @@ breaking change to any of them takes a major version bump.
 | `loop` | `true` | Wrap around the ends of the ladder. With `false`, pressing past the widest or narrowest stop does nothing. |
 | `min_width` | `nil` | Floor in px for a *non-focused* column. `nil` means available width ÷ 12. Raising it removes wide stops from the ladder. |
 
-### Tuning
-
-Geometry heuristics, exposed for debugging. **Treat these as internal** — they
-exist to work around how the layout engine reacts to a resize, and they are
-deliberately outside the promise above: they may change in any release.
-
-| Option | Default | Meaning |
-|---|---|---|
-| `snap` | `nil` | Tolerance for "already on this stop". `nil` means `max(16, available width ÷ 100)`. Every other epsilon derives from it. |
-| `column_tolerance` | `8` | How far two windows' x-intervals must overlap before they count as one column. Raise it if gaps or borders cause windows in one column to be read as two. |
-| `converge_tolerance` | `4` | Below this many pixels of error, a column counts as on target. |
-| `max_passes` | `4` | Sweeps attempted before giving up. A dwindle resize is tree-relative, so one pass does not always converge. |
+If gaps or thick borders make one column read as two, `column_tolerance`
+(default 8) is the knob to raise. It is internal and may change in any release.
 
 ## Updating
 
@@ -239,7 +217,8 @@ The design rationale lives in the header comment of
 direction rule, and why a resize is aimed at a column's anchor.
 [`CONTEXT.md`](CONTEXT.md) defines the vocabulary those comments use: *column*,
 *anchor*, *row*, *available width*, *row width*, *stop*, *slice*, *ladder*,
-*granularity*, *fair share*, *boundary*, *chord*, *snap*. [`docs/adr/`](docs/adr) records the decisions behind the shape of the
+*granularity*, *fair share*, *boundary*, *chord*, *snap*, *convergence
+tolerance*. [`docs/adr/`](docs/adr) records the decisions behind the shape of the
 thing.
 
 ## License
