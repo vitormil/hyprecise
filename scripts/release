@@ -1,0 +1,269 @@
+#!/usr/bin/env bash
+#
+# Release a new version of hyprecise.
+#
+# The prose is yours. Write the new section in CHANGELOG.md first — either
+# under its own version heading or under "## [Unreleased]" — and this script
+# does the mechanics around it: dates the heading, adds the compare link, runs
+# the spec, tags the commit, pushes, and opens the GitHub release with that
+# same section as its body.
+#
+#   scripts/release patch            # 1.0.1 -> 1.0.2
+#   scripts/release minor            # 1.0.1 -> 1.1.0
+#   scripts/release major            # 1.0.1 -> 2.0.0
+#   scripts/release 1.2.3            # exactly that
+#   scripts/release patch --dry-run  # print the plan, change nothing
+#
+# Nothing is committed, pushed or published until you confirm; --yes skips the
+# prompt. hyprecise.lua is never touched, so the running config is unaffected.
+
+set -euo pipefail
+
+die()  { printf 'release: %s\n' "$*" >&2; exit 1; }
+head2() { printf '\n\033[1m%s\033[0m\n' "$*"; }
+item() { printf '  %-9s %s\n' "$1" "$2"; }
+
+usage() {
+  sed -n '3,18p' "$0" | sed 's/^#\{1,\} \{0,1\}//'
+}
+
+# ---------------------------------------------------------------- arguments
+
+WANTED=""
+DRY_RUN=0
+ASSUME_YES=0
+
+while (( $# )); do
+  case "$1" in
+    --dry-run|-n) DRY_RUN=1 ;;
+    --yes|-y)     ASSUME_YES=1 ;;
+    --help|-h)    usage; exit 0 ;;
+    -*)           die "unknown option: $1" ;;
+    *)
+      if [[ -n "$WANTED" ]]; then die "version given twice: $WANTED and $1"; fi
+      WANTED="$1"
+      ;;
+  esac
+  shift
+done
+
+if [[ -z "$WANTED" ]]; then
+  usage >&2
+  exit 64
+fi
+
+# ------------------------------------------------------------------ the repo
+
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repository"
+cd "$ROOT"
+
+if ! command -v gh >/dev/null 2>&1; then
+  die "gh not found — it is what opens the GitHub release"
+fi
+if ! gh auth status >/dev/null 2>&1; then
+  die "gh is not authenticated; run: gh auth login"
+fi
+
+LUA=$(command -v lua5.4 || command -v lua) || die "no lua interpreter found"
+
+BRANCH=$(git symbolic-ref --quiet --short HEAD) || die "HEAD is detached; check out master first"
+if [[ "$BRANCH" != master ]]; then
+  die "on branch $BRANCH; releases are cut from master"
+fi
+
+# CHANGELOG.md is allowed to be dirty — it is the one file a release edits.
+while IFS= read -r changed; do
+  if [[ -n "$changed" && "$changed" != CHANGELOG.md ]]; then
+    die "uncommitted change in $changed — commit or stash it first"
+  fi
+done < <(git diff --name-only HEAD --)
+
+git fetch --quiet --tags origin
+
+UPSTREAM=$(git rev-parse --quiet --verify '@{upstream}' 2>/dev/null) || die "master has no upstream; set one with: git push -u origin master"
+BASE=$(git merge-base HEAD "$UPSTREAM")
+if [[ "$(git rev-parse HEAD)" == "$BASE" && "$(git rev-parse HEAD)" != "$UPSTREAM" ]]; then
+  die "master is behind origin/master; pull first"
+fi
+if [[ "$UPSTREAM" != "$BASE" && "$(git rev-parse HEAD)" != "$BASE" ]]; then
+  die "master has diverged from origin/master; reconcile first"
+fi
+
+# ---------------------------------------------------------------- the number
+
+LATEST=$(git tag -l 'v[0-9]*' --sort=-v:refname | head -n1)
+PREV="${LATEST#v}"
+
+case "$WANTED" in
+  major|minor|patch)
+    if [[ -z "$LATEST" ]]; then die "no previous tag to bump from; pass an explicit version"; fi
+    IFS=. read -r MAJOR MINOR PATCH <<<"$PREV"
+    case "$WANTED" in
+      major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+      minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+      patch) PATCH=$((PATCH + 1)) ;;
+    esac
+    VERSION="$MAJOR.$MINOR.$PATCH"
+    ;;
+  *)
+    VERSION="${WANTED#v}"
+    ;;
+esac
+
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  die "not a version: $VERSION (want major, minor, patch, or X.Y.Z)"
+fi
+TAG="v$VERSION"
+
+if [[ -n "$PREV" ]]; then
+  HIGHER=$(printf '%s\n%s\n' "$PREV" "$VERSION" | sort -V | tail -n1)
+  if [[ "$VERSION" == "$PREV" || "$HIGHER" != "$VERSION" ]]; then
+    die "$VERSION does not come after $PREV"
+  fi
+fi
+
+if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+  die "tag $TAG already exists locally"
+fi
+if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+  die "tag $TAG already exists on origin"
+fi
+
+# ----------------------------------------------------------------- the spec
+
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+
+if ! "$LUA" tests/hyprecise_spec.lua >"$WORK/spec.out" 2>&1; then
+  cat "$WORK/spec.out" >&2
+  die "the spec fails; nothing was released"
+fi
+SPEC_SUMMARY=$(tail -n1 "$WORK/spec.out")
+
+# ------------------------------------------------------------- the changelog
+
+TODAY=$(date +%F)
+
+if grep -q '^## \[Unreleased\]' CHANGELOG.md; then
+  HEADING_EDIT="[Unreleased] becomes [$VERSION], dated $TODAY"
+elif grep -qF "## [$VERSION]" CHANGELOG.md; then
+  if grep -qF "## [$VERSION] — " CHANGELOG.md; then
+    HEADING_EDIT=""
+  else
+    HEADING_EDIT="heading dated $TODAY"
+  fi
+else
+  die "CHANGELOG.md has no section for $VERSION — write it first, under '## [$VERSION]' or '## [Unreleased]'"
+fi
+
+REPO_URL=$(gh repo view --json url -q .url)
+if [[ -n "$PREV" ]]; then
+  LINK="[$VERSION]: $REPO_URL/compare/$LATEST...$TAG"
+else
+  LINK="[$VERSION]: $REPO_URL/releases/tag/$TAG"
+fi
+if grep -qF "[$VERSION]: " CHANGELOG.md; then
+  LINK=""
+fi
+
+awk -v ver="$VERSION" -v today="$TODAY" -v link="$LINK" '
+  BEGIN { heading = 0; linked = (link == "") }
+  !heading && index($0, "## [Unreleased]") == 1 {
+    print "## [" ver "] — " today; heading = 1; next
+  }
+  !heading && index($0, "## [" ver "]") == 1 {
+    if (index($0, "—") > 0) print $0
+    else print "## [" ver "] — " today
+    heading = 1; next
+  }
+  !linked && /^\[[0-9]+\.[0-9]+\.[0-9]+\]: / { print link; linked = 1 }
+  { print }
+  END {
+    if (!linked) { print ""; print link }
+    if (!heading) exit 3
+  }
+' CHANGELOG.md > "$WORK/CHANGELOG.md" || die "could not place the $VERSION heading in CHANGELOG.md"
+
+awk -v ver="$VERSION" '
+  index($0, "## [" ver "]") == 1 { inside = 1; next }
+  inside && index($0, "## ") == 1 { exit }
+  inside && /^\[[0-9]+\.[0-9]+\.[0-9]+\]: / { exit }
+  inside { lines[++n] = $0 }
+  END {
+    first = 1; last = n
+    while (first <= n && lines[first] ~ /^[[:space:]]*$/) first++
+    while (last >= first && lines[last] ~ /^[[:space:]]*$/) last--
+    for (i = first; i <= last; i++) print lines[i]
+  }
+' "$WORK/CHANGELOG.md" > "$WORK/notes.md"
+
+if [[ ! -s "$WORK/notes.md" ]]; then
+  die "the $VERSION section of CHANGELOG.md is empty; there is nothing to release"
+fi
+
+# ------------------------------------------------------------------ the plan
+
+SUBJECT=$(git log -1 --format='%h %s')
+CHANGELOG_DIFF=$(diff -u CHANGELOG.md "$WORK/CHANGELOG.md" || true)
+
+head2 "hyprecise $VERSION"
+item "spec" "$SPEC_SUMMARY"
+EDITS="$HEADING_EDIT"
+if [[ -n "$LINK" ]]; then
+  if [[ -n "$EDITS" ]]; then EDITS="$EDITS, compare link added"; else EDITS="compare link added"; fi
+fi
+if [[ -n "$EDITS" ]]; then
+  item "changelog" "$EDITS"
+else
+  item "changelog" "complete as written, left alone"
+fi
+item "commit" "$SUBJECT"
+item "tag" "$TAG, annotated \"hyprecise $VERSION\""
+item "push" "origin master, origin $TAG"
+item "release" "$REPO_URL/releases/tag/$TAG, titled \"$VERSION\""
+
+if [[ -n "$CHANGELOG_DIFF" ]]; then
+  head2 "CHANGELOG.md"
+  printf '%s\n' "$CHANGELOG_DIFF" | tail -n +3
+fi
+
+head2 "Release notes"
+sed 's/^/  /' "$WORK/notes.md"
+printf '\n'
+
+if (( DRY_RUN )); then
+  printf 'Dry run: nothing was changed.\n'
+  exit 0
+fi
+
+if (( ! ASSUME_YES )); then
+  read -r -p "Release $VERSION? [y/N] " reply </dev/tty
+  case "$reply" in
+    y|Y|yes|Yes) ;;
+    *) die "cancelled; nothing was changed" ;;
+  esac
+fi
+
+# --------------------------------------------------------------- the release
+
+cp "$WORK/CHANGELOG.md" CHANGELOG.md
+
+if [[ -n "$(git diff --name-only HEAD -- CHANGELOG.md)" ]]; then
+  git add CHANGELOG.md
+  git commit --quiet --message "hyprecise $VERSION"
+  printf 'committed  %s\n' "$(git log -1 --format='%h %s')"
+fi
+
+git tag --annotate "$TAG" --message "hyprecise $VERSION"
+printf 'tagged     %s\n' "$TAG"
+
+git push --quiet origin master
+git push --quiet origin "$TAG"
+printf 'pushed     origin master, origin %s\n' "$TAG"
+
+gh release create "$TAG" \
+  --title "$VERSION" \
+  --notes-file "$WORK/notes.md" \
+  --verify-tag \
+  >/dev/null
+printf 'released   %s/releases/tag/%s\n' "$REPO_URL" "$TAG"
