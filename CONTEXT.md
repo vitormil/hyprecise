@@ -3,13 +3,31 @@
 The vocabulary hyprecise is designed and discussed in. Definitions only — how any
 of this is implemented is a question for the source.
 
+## Row
+
+A horizontal band of the workspace: a maximal y-interval that no window crosses.
+A workspace with no full-width horizontal cut is a single row holding every
+window, which is what most of them are. One with such a cut — a full-width window
+over a pair, a grid, a stack of bands — is as many rows as the cuts leave.
+
+Hyprecise reasons about exactly one row at a time, the focused window's, and
+never reads or moves a window outside it. A row is read as columns; a row of one
+has no boundary of its own and so is left alone.
+
+The row reading is confined to one workspace of one monitor. A Hyprland workspace
+lives on a single monitor, so the two halves of that boundary normally coincide;
+a window found on neither takes no part in the reckoning.
+
 ## Column
 
-A vertical slice of the workspace: a maximal x-interval that no window crosses. A
-column may hold a single window, a vertical stack of several, or a whole tree of
-splits nested to any depth; it is still one column, because it presents one pair
-of vertical edges to its neighbours. What a column contains is never looked at.
-Columns are what hyprecise resizes. Windows are not.
+A vertical slice of a row: a maximal x-interval that no window in the row
+crosses. A column may hold a single window, a vertical stack of several, or a
+whole tree of splits nested to any depth; it is still one column, because it
+presents one pair of vertical edges to its neighbours. What a column contains is
+never looked at. Columns are what hyprecise resizes. Windows are not.
+
+Rows and columns are the same reading on the two axes, and the row reading comes
+first because it says which windows the column reading is about.
 
 ## Anchor
 
@@ -20,14 +38,6 @@ column's, and moving it moves the column rather than something nested within.
 Ties go to the topmost. A column with no anchor cannot be resized, and a row
 containing one is left alone.
 
-## Row
-
-The full set of columns on one workspace of one monitor, read left to right.
-Hyprecise reasons about exactly one row at a time — the focused window's — and
-never reads or moves a window outside it. A workspace lives on a single monitor,
-so the two halves of that boundary normally coincide; a window found on neither
-is not part of the row and takes no part in the reckoning.
-
 ## Available width
 
 The monitor's logical width less anything reserved at its left or right edges. A
@@ -36,17 +46,17 @@ down one side does. The granularity is read from this and nothing else.
 
 ## Row width
 
-The width the columns actually share out: the sum of their widths. Smaller than
-the available width by the gaps between and around the windows. Stops are
+The width the row's columns actually share out: the sum of their widths. Smaller
+than the available width by the gaps between and around the windows. Stops are
 fractions of this, so every stop names a width a column can really have.
 
 ## Boundary
 
-A vertical edge shared between two adjacent columns, or between a column and the
-screen. An x-coordinate is a boundary exactly when no window crosses it, which is
-what makes a column's contents irrelevant to where its edges are. Every resize is
-the movement of exactly one boundary. Naming the boundary
-is what lets a direction be expressed in screen space ("move the right edge
+A vertical edge shared between two adjacent columns of a row, or between a column
+and the screen. An x-coordinate is a boundary exactly when no window in the row
+crosses it, which is what makes a column's contents irrelevant to where its edges
+are. Every resize is the movement of exactly one boundary. Naming the boundary is
+what lets a direction be expressed in screen space ("move the right edge
 rightward") instead of in intent ("grow") — which is ambiguous for a column that
 has no neighbour on the side you pressed.
 
@@ -94,7 +104,7 @@ folded in, and stops that would starve a neighbour past the floor are dropped.
 
 ## Granularity
 
-How many equal slices the row is cut into. Derived from the available width and
+How many equal slices a row is cut into. Derived from the available width and
 never chosen: a wide monitor earns finer stops because there is room for adjacent
 stops to look different, and it earns them by being wide rather than by being
 told that it is.

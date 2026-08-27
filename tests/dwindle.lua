@@ -239,19 +239,48 @@ function D.press(M, root, focus, direction, opts)
     notification = { create = function() end },
   }
 
-  local before = D.columns(M, root)
+  local before = D.columns(M, root, focus)
   local ok, err = pcall(M.run, direction, opts)
   _G.hl = saved
   if not ok then
     error(err, 0)
   end
-  return { before = before, after = D.columns(M, root), dispatches = dispatches }
+  return { before = before, after = D.columns(M, root, focus), dispatches = dispatches }
+end
+
+--- The leaves hyprecise reads as `focus`'s row, top-to-bottom bands and all.
+--- With no `focus`, every leaf: the whole workspace, which is what a workspace
+--- with no full-width horizontal cut reads as anyway.
+function D.row(M, root, focus)
+  local leaves = D.leaves(root)
+  if not focus then
+    return leaves
+  end
+  local boxes = {}
+  for i, l in ipairs(leaves) do
+    local g = D.geom(l)
+    boxes[i] = { x = g.x, y = g.y, w = g.w, h = g.h, id = i }
+  end
+  for _, r in ipairs(M.rows(boxes, 8)) do
+    for _, id in ipairs(r.ids) do
+      if leaves[id] == focus then
+        local out = {}
+        for _, member in ipairs(r.ids) do
+          out[#out + 1] = leaves[member]
+        end
+        return out
+      end
+    end
+  end
+  return {}
 end
 
 --- The row as hyprecise reads it: the widths of its columns, left to right.
-function D.columns(M, root)
+--- Restricted to `focus`'s row when one is given, because that is the row a
+--- chord is about and the only one whose columns a plan describes.
+function D.columns(M, root, focus)
   local boxes = {}
-  for i, l in ipairs(D.leaves(root)) do
+  for i, l in ipairs(D.row(M, root, focus)) do
     local g = D.geom(l)
     boxes[i] = { x = g.x, y = g.y, w = g.w, id = i }
   end
@@ -262,15 +291,28 @@ function D.columns(M, root)
   return out
 end
 
+--- Every window's geometry, by name. Lets the spec ask what a chord did to the
+--- windows OUTSIDE the row it was aimed at, which should be nothing at all.
+function D.snapshot(root)
+  local out = {}
+  for _, l in ipairs(D.leaves(root)) do
+    out[l.leaf] = D.geom(l)
+  end
+  return out
+end
+
 --- What hyprecise's planner wants for this row, so the spec can check the result
 --- against hyprecise's own intention rather than against a hand-copied number.
 function D.plan(M, root, focus, direction, opts)
   D.recalc(root)
-  local leaves = D.leaves(root)
+  local leaves = D.row(M, root, focus)
   local boxes = {}
   for i, l in ipairs(leaves) do
     local g = D.geom(l)
     boxes[i] = { x = g.x, y = g.y, w = g.w, id = i }
+  end
+  if #leaves < 2 then
+    return nil
   end
   local cols = M.columns(boxes, 8)
   if #cols < 2 or not M.anchored(cols) then

@@ -7,8 +7,9 @@
 Hyprland's built-in resize bindings move a window by a fixed pixel delta — press
 the key four times and you land somewhere arbitrary, different every session.
 Hyprecise steps the focused *column* onto the next stop of a fixed ladder of
-widths instead, and splits whatever is left equally among the other columns. The
-same keypress on the same layout always produces the same result.
+widths instead, and splits whatever is left equally among the other columns of
+that *row*. The same keypress on the same layout always produces the same
+result.
 
 It controls width, and only width. No dispatch it issues ever changes a window's
 height.
@@ -115,13 +116,13 @@ move, so `Right` moves its left edge rightward instead — the column shrinks.
 way from either focus position, and it is deliberate, not a bug.
 
 Every path is silent. Nothing happens on a floating or fullscreen window, on a
-workspace with fewer than two tiled windows, on a single column, or when the
-requested move would be smaller than the convergence tolerance.
+workspace with fewer than two tiled windows, on a row that is a single column, or
+when the requested move would be smaller than the convergence tolerance.
 
 A keypress only ever reads or moves windows on the focused window's own
-workspace, on the focused window's own monitor. Anything else is dropped before
-the layout is read, so every column a keypress touches is on the current monitor
-by construction.
+workspace, on the focused window's own monitor, in the focused window's own row.
+Anything else is dropped before the layout is read, so every column a keypress
+touches is on the current monitor by construction.
 
 ## Nested windows are still one column
 
@@ -141,10 +142,51 @@ column, and hyprecise never looks inside.
 
 Focus `A`, `B`, `D`, `F` or `G` and the chord moves the boundary of the column
 holding it, the splits inside keeping their proportions — so `Right` does the
-same thing from `D`, `F` and `G`, because all three are column `C`. Two layouts
-have no row to read and stay silent: a window straddling its neighbours'
-boundary leaves a single column, which has no boundary to move; and a column no
-member spans has no window whose resize is known to move the outer edge.
+same thing from `D`, `F` and `G`, because all three are column `C`. A column no
+member spans has no window whose resize is known to move the outer edge, and a
+row containing one stays silent.
+
+## Rows resize one at a time
+
+Cut a workspace across its full width and it is no longer one row of columns but
+several, stacked. A row is a maximal y-interval that **no window crosses** — the
+same reading as a column, turned ninety degrees. A chord is about the focused
+window's row, and leaves every other row exactly where it is.
+
+```
+   ┌───────────────────────────────────────┐
+   │                   A                   │   row 1
+   ├──────────────────┬────────────────────┤
+   │        B         │         C          │   row 2
+   └──────────────────┴────────────────────┘
+
+                      │  SUPER + ALT + Right  (C focused)
+                      ▼
+
+   ┌───────────────────────────────────────┐
+   │                   A                   │   unchanged
+   ├────────────────────────────┬──────────┤
+   │             B              │    C     │
+   └────────────────────────────┴──────────┘
+```
+
+Focus `B` or `C` and the chord steps that row's ladder; `A` never moves, and no
+height ever changes. Focus `A` and nothing happens: its row holds one window,
+which has no neighbour to share a boundary with.
+
+A grid works the same way — two rows of two, each with its own boundary — and
+the two rows need not be split at the same place. A workspace with no full-width
+cut is a single row holding every window, which is what hyprecise has always read
+and what most workspaces are.
+
+One layout still stays silent: a window straddling its neighbours' boundary
+leaves its row a single column, which has no boundary to move.
+
+And one moves more than its row, unavoidably. Where two rows are the two halves
+of *one* vertical split — a grid built as a pair of stacks side by side, rather
+than as a pair of rows one above the other — that split belongs to both rows at
+once. Moving it moves both, and no dispatch exists that would separate them.
+Every other grid resizes a row at a time.
 
 ## Breakpoints
 
@@ -174,7 +216,8 @@ breaking change to any of them takes a major version bump.
 | `min_width` | `nil` | Floor in px for a *non-focused* column. `nil` means available width ÷ 12. Raising it removes wide stops from the ladder. |
 
 If gaps or thick borders make one column read as two, `column_tolerance`
-(default 8) is the knob to raise. It is internal and may change in any release.
+(default 8) is the knob to raise — `row_tolerance` (also 8) is its counterpart
+for rows. Both are internal and may change in any release.
 
 ## Updating
 
@@ -203,20 +246,21 @@ the suite runs anywhere:
 lua tests/hyprecise_spec.lua
 ```
 
-99 assertions covering granularity across monitor sizes, ladder construction,
-stepping, redistribution, width conservation, the floor, row membership
-(including the dropping of out-of-scope windows), column detection (vertical
-stacks, nested trees at several depths, straddling windows, and columns with no
-anchor), and chord derivation. CI runs them on every
-push and pull request.
+138 assertions covering granularity across monitor sizes, ladder construction,
+stepping, redistribution, width conservation, the floor, workspace membership
+(including the dropping of out-of-scope windows), row detection, column detection
+(vertical stacks, nested trees at several depths, straddling windows, and columns
+with no anchor), and chord derivation. The half that issues dispatches is driven
+against a model of the dwindle layout in `tests/dwindle.lua`. CI runs them on
+every push and pull request.
 
 ## How it works
 
 The design rationale lives in the header comment of
 [`hyprecise.lua`](hyprecise.lua) — the ladder, the equal split, the screen-space
 direction rule, and why a resize is aimed at a column's anchor.
-[`CONTEXT.md`](CONTEXT.md) defines the vocabulary those comments use: *column*,
-*anchor*, *row*, *available width*, *row width*, *stop*, *slice*, *ladder*,
+[`CONTEXT.md`](CONTEXT.md) defines the vocabulary those comments use: *row*,
+*column*, *anchor*, *available width*, *row width*, *stop*, *slice*, *ladder*,
 *granularity*, *fair share*, *boundary*, *chord*, *snap*, *convergence
 tolerance*. [`docs/adr/`](docs/adr) records the decisions behind the shape of the
 thing.

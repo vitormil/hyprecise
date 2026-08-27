@@ -27,13 +27,22 @@
 -- Hyprecise controls the WIDTH of tiled columns, and only the width. No
 -- dispatch it issues ever changes a window's height.
 --
--- The workspace is read as a row of columns. A column is a maximal x-interval
--- that no window crosses: windows whose x-intervals overlap belong to the same
--- column, however deeply the layout engine has subdivided it. So a column
--- holding a nested tree of splits is one column, exactly as a lone window is,
--- and hyprecise never looks inside one. Resizing moves the focused column onto
--- the next stop of a "ladder" of widths, and the remaining columns split what
--- is left over EQUALLY.
+-- The workspace is read as a stack of ROWS, and one of them -- the focused
+-- window's -- as a line of COLUMNS. A row is a maximal y-interval that no window
+-- crosses; a column is a maximal x-interval that no window crosses. They are the
+-- same reading of the layout on the two axes, and the row reading comes first
+-- because it says which windows the column reading is about. A workspace with no
+-- full-width horizontal cut is a single row holding everything, which is what
+-- hyprecise has always read; one with such a cut -- a window over a pair, a
+-- grid, a stack of bands -- gives each row its own boundaries, and a chord moves
+-- the focused row's and leaves the other rows where they are.
+--
+-- Within that row, windows whose x-intervals overlap belong to the same column,
+-- however deeply the layout engine has subdivided it. So a column holding a
+-- nested tree of splits is one column, exactly as a lone window is, and
+-- hyprecise never looks inside one. Resizing moves the focused column onto the
+-- next stop of a "ladder" of widths, and the remaining columns of that row split
+-- what is left over EQUALLY.
 --
 -- Every resize is aimed at its column's ANCHOR: the member spanning the whole
 -- column. A window that spans its column has no side-by-side split above it
@@ -62,7 +71,7 @@
 -- the monitor's available width; where those stops sit follows from the width
 -- the columns actually share out.
 --
--- The pure decision logic (`row_windows`, `columns`, `anchored`,
+-- The pure decision logic (`workspace_windows`, `rows`, `columns`, `anchored`,
 -- `granularity`, `base_ladder`, `build_ladder`, `plan`, `step`, `chords`) has
 -- no Hyprland dependency and is exercised by tests/hyprecise_spec.lua under
 -- plain `lua`. `run` itself is exercised there too, against a model of the
@@ -90,6 +99,7 @@ local DEFAULTS = {
   min_width = nil, -- floor for a non-focused column; nil = available/12
   snap = nil, -- "same stop" tolerance; nil = max(16, available/100)
   column_tolerance = 8, -- px slack when bucketing windows into columns
+  row_tolerance = 8, -- px slack when bucketing windows into rows
   converge_tolerance = 4, -- px; below this a column is considered on target
   max_passes = 4, -- sweep attempts before giving up
 }
@@ -143,28 +153,29 @@ local function snap_of(available, opts)
 end
 
 -- --------------------------------------------------------------------------
--- Row membership (pure)
+-- Workspace membership (pure)
 -- --------------------------------------------------------------------------
 
---- The tiled members of the row: the focused window's own monitor and
---- workspace, and nothing else.
+--- The tiled windows of the workspace: the focused window's own monitor and
+--- workspace, and nothing else. Everything a keypress may read or move is drawn
+--- from this set, and the rows and columns below are read from nothing else.
 ---
 --- `scope` is the monitor and workspace the focused window belongs to. A
 --- Hyprland workspace lives on exactly one monitor, so every window handed here
---- should already be in scope; one that is not is not part of this row and takes
---- no part in the reckoning. Columns are read from x-intervals alone, so an
---- out-of-scope window would otherwise be read as a real one -- a window on the
---- next monitor along has an x beyond this monitor's right edge and becomes a
---- phantom rightmost column, and the real windows get shrunk to make room for
---- it. Dropping it removes that danger without making the chord dead.
+--- should already be in scope; one that is not takes no part in the reckoning.
+--- Columns are read from x-intervals alone, so an out-of-scope window would
+--- otherwise be read as a real one -- a window on the next monitor along has an
+--- x beyond this monitor's right edge and becomes a phantom rightmost column,
+--- and the real windows get shrunk to make room for it. Dropping it removes that
+--- danger without making the chord dead.
 ---
 --- Windows excluded for the ordinary reasons -- unmapped, hidden, floating,
---- fullscreen -- were never part of the row either: a floating scratchpad is
---- simply not a column, wherever it lives.
+--- fullscreen -- were never columns either: a floating scratchpad is simply not
+--- a column, wherever it lives.
 --- @param windows table array of HL.Window
 --- @param scope table { monitor = id, workspace = id }
 --- @return table
-function M.row_windows(windows, scope)
+function M.workspace_windows(windows, scope)
   local out = {}
   for _, w in ipairs(windows or {}) do
     if w.mapped and not w.hidden and not w.floating and (w.fullscreen or 0) == 0 then
@@ -178,16 +189,77 @@ function M.row_windows(windows, scope)
 end
 
 -- --------------------------------------------------------------------------
--- Columns (pure)
+-- Rows and columns (pure)
 -- --------------------------------------------------------------------------
+
+--- Sweep boxes into maximal intervals along one axis.
+---
+--- Sorting by near edge and walking left to right -- or top to bottom -- finds
+--- them in one pass: a box starting before the running interval ends crosses no
+--- boundary, so it joins the interval and may extend it; anything else begins a
+--- new one past a boundary nobody occupies.
+---
+--- `pos` and `len` name the axis: "x" and "w" for columns, "y" and "h" for rows.
+--- A row is the same reading of the layout turned ninety degrees, and one sweep
+--- is easier to be sure of than two.
+local function sweep(boxes, tol, pos, len)
+  local sorted = {}
+  for i, b in ipairs(boxes) do
+    sorted[i] = b
+  end
+  table.sort(sorted, function(a, b)
+    if a[pos] ~= b[pos] then
+      return a[pos] < b[pos]
+    end
+    return a[len] > b[len]
+  end)
+
+  local groups = {}
+  for _, b in ipairs(sorted) do
+    local g = groups[#groups]
+    if g and b[pos] < g[pos] + g[len] - tol then
+      local far = math.max(g[pos] + g[len], b[pos] + b[len])
+      g[len] = far - g[pos]
+      g.members[#g.members + 1] = b
+    else
+      groups[#groups + 1] = { [pos] = b[pos], [len] = b[len], members = { b } }
+    end
+  end
+  return groups
+end
+
+--- Read the boxes as a stack of rows.
+---
+--- A row is a maximal y-interval that no window crosses -- the mirror of a
+--- column, and read by the same sweep. A workspace of windows side by side is
+--- one row, however deeply each of them is subdivided, because every one of them
+--- spans the whole height and so they all overlap. A workspace cut across its
+--- full width -- one window over a pair, a grid, a stack of bands -- is as many
+--- rows as the cuts leave.
+---
+--- Rows carry no anchor. An anchor exists to say which window's resize moves a
+--- column's own boundary, and hyprecise never moves a horizontal one: a row is
+--- only ever used to say which windows a keypress is about.
+---
+--- @param boxes table array of { x, y, w, h, id }
+--- @param tol number px slack; boxes must overlap by more than this to join
+--- @return table array of rows, sorted top to bottom
+function M.rows(boxes, tol)
+  local rows = sweep(boxes, tol or DEFAULTS.row_tolerance, "y", "h")
+  for _, r in ipairs(rows) do
+    r.ids = {}
+    for _, b in ipairs(r.members) do
+      r.ids[#r.ids + 1] = b.id
+    end
+    r.members = nil
+  end
+  return rows
+end
 
 --- Read the boxes as a row of columns.
 ---
---- A column is a maximal x-interval that no window crosses. Sorting by left
---- edge and sweeping left to right finds them in one pass: a box starting
---- before the running interval ends crosses no boundary, so it joins the column
---- and may extend it; anything else begins a new column past a boundary nobody
---- occupies.
+--- A column is a maximal x-interval that no window crosses, found by the sweep
+--- above.
 ---
 --- That is the whole of hyprecise's dealing with nested layouts, and it deals
 --- with them by not looking. A column split into a tree of windows is one
@@ -206,29 +278,7 @@ end
 --- @return table array of columns, sorted left to right
 function M.columns(boxes, tol)
   tol = tol or DEFAULTS.column_tolerance
-
-  local sorted = {}
-  for i, b in ipairs(boxes) do
-    sorted[i] = b
-  end
-  table.sort(sorted, function(a, b)
-    if a.x ~= b.x then
-      return a.x < b.x
-    end
-    return a.w > b.w
-  end)
-
-  local cols = {}
-  for _, b in ipairs(sorted) do
-    local c = cols[#cols]
-    if c and b.x < c.x + c.w - tol then
-      local right = math.max(c.x + c.w, b.x + b.w)
-      c.w = right - c.x
-      c.members[#c.members + 1] = b
-    else
-      cols[#cols + 1] = { x = b.x, w = b.w, members = { b } }
-    end
-  end
+  local cols = sweep(boxes, tol, "x", "w")
 
   for _, c in ipairs(cols) do
     local anchor, anchor_y
@@ -488,7 +538,7 @@ local function available_width(m)
 end
 
 local function tiled_windows(ws, scope)
-  return M.row_windows(hl.get_workspace_windows(ws), scope)
+  return M.workspace_windows(hl.get_workspace_windows(ws), scope)
 end
 
 local function resize(win, delta)
@@ -500,7 +550,7 @@ local function resize(win, delta)
   }))
 end
 
---- The row as it stands, read back from live geometry.
+--- The focused row as it stands, read back from live geometry.
 local function read_row(wins, opts)
   local boxes = {}
   for i, w in ipairs(wins) do
@@ -659,6 +709,24 @@ local function apply(wins, cols, targets, opts)
   return false
 end
 
+--- The windows of the row `address` is in, in the order the row reading found
+--- them. Empty when the focused window is not among the boxes, which it always
+--- is: a window is in exactly one row.
+local function focused_row(wins, boxes, address, tol)
+  for _, r in ipairs(M.rows(boxes, tol)) do
+    for _, id in ipairs(r.ids) do
+      if wins[id].address == address then
+        local out = {}
+        for _, member in ipairs(r.ids) do
+          out[#out + 1] = wins[member]
+        end
+        return out
+      end
+    end
+  end
+  return {}
+end
+
 --- Entry point. Silent on every no-op path: this runs on a keybind, so there
 --- is nowhere for a message to go.
 local function run(direction, user_opts)
@@ -676,25 +744,45 @@ local function run(direction, user_opts)
     return
   end
 
-  -- Everything hyprecise reads or moves belongs to one row: the focused window's
+  -- Everything hyprecise reads or moves belongs to the focused window's
   -- workspace on the focused window's monitor. Anything else is dropped, so the
-  -- columns it goes on to read are this monitor's and no others'.
+  -- rows and columns it goes on to read are this monitor's and no others'.
   local scope = { monitor = monitor.id, workspace = ws.id }
-  local wins = tiled_windows(ws, scope)
-  if not wins or #wins < 2 then
+  local tiled = tiled_windows(ws, scope)
+  if not tiled or #tiled < 2 then
     return
   end
 
   local boxes = {}
-  for i, w in ipairs(wins) do
-    boxes[i] = { x = w.at.x, y = w.at.y, w = w.size.x, id = i }
+  for i, w in ipairs(tiled) do
+    boxes[i] = { x = w.at.x, y = w.at.y, w = w.size.x, h = w.size.y, id = i }
   end
 
-  local cols = M.columns(boxes, opts.column_tolerance)
+  -- Which ROW the keypress is about. A workspace cut across its full width is
+  -- several rows, and each of them has its own boundaries; a chord moves the
+  -- focused window's row and leaves the others where they are. A workspace with
+  -- no such cut is one row holding every window, which is what it has always
+  -- been read as.
+  local wins = focused_row(tiled, boxes, win.address, opts.row_tolerance)
+  if #wins < 2 then
+    -- A row of one: a full-width window over a pair, focused on the full-width
+    -- one. It has no neighbour to share a boundary with, and heights are out of
+    -- scope, so there is nothing to do.
+    return
+  end
+
+  -- Re-box against the row, so a column's `anchor` and `ids` index the row's own
+  -- windows and every later reading is confined to it.
+  local row_boxes = {}
+  for i, w in ipairs(wins) do
+    row_boxes[i] = { x = w.at.x, y = w.at.y, w = w.size.x, id = i }
+  end
+
+  local cols = M.columns(row_boxes, opts.column_tolerance)
   if #cols < 2 then
-    -- One column: a lone window, a vertical stack, or a workspace subdivided
-    -- entirely inside itself. There is no boundary between columns to move and
-    -- heights are out of scope, so there is nothing to do.
+    -- One column: a lone window, a vertical stack, or a row subdivided entirely
+    -- inside itself. There is no boundary between columns to move and heights
+    -- are out of scope, so there is nothing to do.
     return
   end
 

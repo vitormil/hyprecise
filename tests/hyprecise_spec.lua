@@ -4,9 +4,9 @@
 --   lua tests/hyprecise_spec.lua
 --
 -- No compositor required. The suite touches no Hyprland API -- only
--- M.row_windows, M.columns, M.anchored, M.granularity, M.base_ladder,
--- M.build_ladder, M.step and M.plan -- which is the whole reason the decision
--- logic is kept pure.
+-- M.workspace_windows, M.rows, M.columns, M.anchored, M.granularity,
+-- M.base_ladder, M.build_ladder, M.step and M.plan -- which is the whole reason
+-- the decision logic is kept pure.
 
 local here = arg[0]:match("(.*)/") or "."
 local M = dofile(here .. "/../hyprecise.lua")
@@ -257,7 +257,7 @@ end
 check("non-focused columns equal within 1px", equal_ok, true)
 
 -- ---------------------------------------------------------------------------
--- Row membership -- which windows a keypress is allowed to touch
+-- Workspace membership -- which windows a keypress is allowed to touch
 -- ---------------------------------------------------------------------------
 
 local SCOPE = { monitor = 0, workspace = 2 }
@@ -277,8 +277,8 @@ local function win(t)
 end
 
 local function members(list)
-  local row = M.row_windows(list, SCOPE)
-  return row and #row or nil
+  local tiled = M.workspace_windows(list, SCOPE)
+  return tiled and #tiled or nil
 end
 
 check("all in scope -> every tiled window", members({ win(), win() }), 2)
@@ -288,8 +288,8 @@ check(
   members({ win(), win({ hidden = true }), win({ mapped = false }), win({ fullscreen = 2 }) }),
   1
 )
-check("no windows -> an empty row, not a refusal", members({}), 0)
-check("no list at all -> an empty row, not a refusal", members(nil), 0)
+check("no windows -> an empty workspace, not a refusal", members({}), 0)
+check("no list at all -> an empty workspace, not a refusal", members(nil), 0)
 
 -- Scope is a filter, not a veto. A tiled window from elsewhere sits at an x
 -- beyond this monitor, so read as a column it would be a phantom rightmost one
@@ -299,25 +299,82 @@ check("tiled window on another monitor is dropped", members({ win(), win({ monit
 check("tiled window on another workspace is dropped", members({ win(), win({ workspace = 9 }) }), 1)
 check("tiled window with no monitor is dropped", members({ win({ monitor = false }), win() }), 1)
 check("tiled window with no workspace is dropped", members({ win({ workspace = false }), win() }), 1)
-check("a row of foreign windows is empty, not a refusal", members({ win({ monitor = 1 }), win({ monitor = 2 }) }), 0)
-check("an in-scope row is never trimmed", members({ win(), win(), win() }), 3)
+check("a workspace of foreign windows is empty, not a refusal", members({ win({ monitor = 1 }), win({ monitor = 2 }) }), 0)
+check("an in-scope workspace is never trimmed", members({ win(), win(), win() }), 3)
 
--- An out-of-scope window that was never going to be a column aborts nothing.
--- A floating scratchpad on the next monitor along is simply not part of this row.
+-- An out-of-scope window that was never going to be a column aborts nothing. A
+-- floating scratchpad on the next monitor along is simply not part of this
+-- workspace.
 check("floating window from elsewhere is ignored", members({ win(), win({ floating = true, monitor = 1 }) }), 1)
 check("hidden window from elsewhere is ignored", members({ win(), win({ hidden = true, workspace = 9 }) }), 1)
+
+--- A box fixture: { x, y, w } and, where a test is about rows, a height. The
+--- default height is one that reaches the bottom of a 1440 screen, so a fixture
+--- that says nothing about heights is a single full-height row.
+local function boxes(list)
+  local out = {}
+  for i, b in ipairs(list) do
+    out[i] = { x = b[1], y = b[2], w = b[3], h = b[4] or (1430 - b[2]), id = i }
+  end
+  return out
+end
+
+-- ---------------------------------------------------------------------------
+-- Row detection
+-- ---------------------------------------------------------------------------
+--
+-- A row is a maximal y-interval that no window crosses -- the mirror of a
+-- column, read by the same sweep. It says which windows a keypress is about;
+-- the column reading then happens inside it.
+
+--- How many windows each row holds, top to bottom.
+local function rows_of(list)
+  local out = {}
+  for i, r in ipairs(M.rows(boxes(list))) do
+    out[i] = #r.ids
+  end
+  return out
+end
+
+-- Windows side by side span the full height and so all overlap: one row. Every
+-- layout hyprecise handled before rows existed still reads as exactly that.
+check("3 side-by-side windows -> 1 row", rows_of({ { 13, 39, 1120 }, { 1159, 39, 1120 }, { 2305, 39, 1122 } }), { 3 })
+check("a lone window -> 1 row", rows_of({ { 13, 39, 3414 } }), { 1 })
+
+-- The layout the row reading exists for: A across the top, B and C below it.
+-- The whole workspace reads as ONE column, because A crosses the B | C
+-- boundary -- so without rows there is nothing here to resize.
+local TWO_ROWS = { { 13, 39, 3414, 686 }, { 13, 741, 1699, 686 }, { 1728, 741, 1699, 686 } }
+check("A over B | C -> 2 rows", rows_of(TWO_ROWS), { 1, 2 })
+check("the lower row holds B and C", M.rows(boxes(TWO_ROWS))[2].ids, { 2, 3 })
+check("and the workspace as a whole is one column", #M.columns(boxes(TWO_ROWS)), 1)
+check("while the lower row is two", #M.columns(boxes({ TWO_ROWS[2], TWO_ROWS[3] })), 2)
+
+-- A grid is two rows of two, each with its own boundary.
+local GRID = { { 13, 39, 1699, 686 }, { 1728, 39, 1699, 686 }, { 13, 741, 1699, 686 }, { 1728, 741, 1699, 686 } }
+check("a grid -> 2 rows of 2", rows_of(GRID), { 2, 2 })
+
+-- A column that spans the full height overlaps every band beside it, so there is
+-- no full-width cut and the workspace is a single row -- which is what makes a
+-- nested column go on being one column rather than becoming two rows.
+check("a full-height column beside a stack -> 1 row", rows_of({ { 13, 39, 1699 }, { 1728, 39, 1699, 686 }, { 1728, 741, 1699, 686 } }), { 3 })
+
+-- Three bands, which is also what a pure vertical stack is: each member is its
+-- own row, and a row of one has no boundary to move.
+check("three bands -> 3 rows", rows_of({ { 13, 39, 3414, 450 }, { 13, 505, 3414, 456 }, { 13, 977, 3414, 450 } }), { 1, 1, 1 })
+
+-- Rows are found top to bottom whatever order the windows arrive in.
+check("rows are ordered top to bottom", rows_of({ { 13, 741, 1699, 686 }, { 1728, 741, 1699, 686 }, { 13, 39, 3414, 686 } }), { 1, 2 })
+
+-- The same tolerance rule as columns: the gap between two tiled rows is real,
+-- and a couple of px of border overlap must not merge them.
+check("touching rows do not merge", #M.rows(boxes({ { 13, 0, 3414, 720 }, { 13, 720, 3414, 720 } })), 2)
+check("rows overlapping within tolerance do not merge", #M.rows(boxes({ { 13, 0, 3414, 725 }, { 13, 720, 3414, 720 } })), 2)
+check("rows overlapping past tolerance do merge", #M.rows(boxes({ { 13, 0, 3414, 740 }, { 13, 720, 3414, 720 } })), 1)
 
 -- ---------------------------------------------------------------------------
 -- Column detection
 -- ---------------------------------------------------------------------------
-
-local function boxes(list)
-  local out = {}
-  for i, b in ipairs(list) do
-    out[i] = { x = b[1], y = b[2], w = b[3], id = i }
-  end
-  return out
-end
 
 --- The widths of the columns a layout reads as, left to right.
 local function widths_of(list)
@@ -469,20 +526,48 @@ local function lands(root, focus, direction)
   return plan ~= nil and worst <= 8
 end
 
---- True when the chord changed nothing at all -- which is what a refusal has to
---- look like, the nudges it asks with included.
-local function untouched(root, focus, direction)
-  D.equalise(root)
-  local result = D.press(M, root, focus, direction)
-  if #result.before ~= #result.after then
-    return false
-  end
-  for i, w in ipairs(result.before) do
-    if w ~= result.after[i] then
+--- True when two snapshots agree to the pixel, on every window.
+local function identical(before, after)
+  for name, b in pairs(before) do
+    local a = after[name]
+    if not a or b.x ~= a.x or b.y ~= a.y or b.w ~= a.w or b.h ~= a.h then
       return false
     end
   end
   return true
+end
+
+--- True when the chord changed nothing at all, anywhere on the workspace --
+--- which is what a refusal has to look like, the nudges it asks with included.
+local function untouched(root, focus, direction)
+  D.equalise(root)
+  local before = D.snapshot(root)
+  D.press(M, root, focus, direction)
+  return identical(before, D.snapshot(root))
+end
+
+--- True when the chord left every window OUTSIDE the focused row exactly where
+--- it was. A chord is about one row; the others are not its business.
+local function isolated(root, focus, direction)
+  D.equalise(root)
+  local mine = {}
+  for _, l in ipairs(D.row(M, root, focus)) do
+    mine[l.leaf] = true
+  end
+  local before, elsewhere = D.snapshot(root), {}
+  for name, g in pairs(before) do
+    if not mine[name] then
+      elsewhere[name] = g
+    end
+  end
+  D.press(M, root, focus, direction)
+  return identical(elsewhere, D.snapshot(root))
+end
+
+--- Both halves of what a chord owes a multi-row workspace: the focused row
+--- lands on its plan, and no other row moves at all.
+local function lands_in_row(root, focus, direction)
+  return isolated(root, focus, direction) and lands(root, focus, direction)
 end
 
 --- The four chords from every focus position, over one tree.
@@ -569,12 +654,65 @@ check("a boundary no window can move is refused", every_chord(function()
   return side(side(leaf("A"), leaf("B")), side(leaf("C"), leaf("E")))
 end, untouched), true)
 
--- Two side-by-side splits stacked at the same ratio present exactly the edges a
--- two-column row would, and come apart the moment either half moves. Reading it
--- as columns and resizing them would ruin the grid AND leave a row that reads as
--- one column, so every later keypress would be dead.
-check("a grid is not mistaken for columns", every_chord(function()
+-- ---------------------------------------------------------------------------
+-- Rows -- a chord is about the focused window's row and no other
+-- ---------------------------------------------------------------------------
+
+--- The four chords over one tree, from every window whose name `only` names --
+--- or from every window, when it names none.
+local function from(make, predicate, only)
+  return every_chord(make, function(root, focus, dir)
+    if only and not only[focus.leaf] then
+      return true
+    end
+    return predicate(root, focus, dir)
+  end)
+end
+
+-- The layout the row reading exists for. A across the top, B | C below: the
+-- workspace reads as one column, because A crosses the B | C boundary, so every
+-- chord from every window was a silent no-op. Now B and C are a row of two.
+local function OVER_PAIR()
+  return stack(leaf("A"), side(leaf("B"), leaf("C")))
+end
+check("A over B | C: the lower row lands on its plan", from(OVER_PAIR, lands_in_row, { B = true, C = true }), true)
+
+-- A is a row of one. It has no neighbour to share a boundary with, and heights
+-- are out of scope, so there is nothing a chord from it could do.
+check("A over B | C: the full-width row is a no-op", from(OVER_PAIR, untouched, { A = true }), true)
+
+-- Depth inside a row changes nothing: the row is read as columns exactly as a
+-- whole workspace was.
+check("a row of three below a full-width window lands on the plan", from(function()
+  return stack(leaf("A"), side(leaf("B"), side(leaf("C"), leaf("E"))))
+end, lands_in_row, { B = true, C = true, E = true }), true)
+
+-- Two side-by-side splits stacked one above the other are two rows, each with
+-- its own boundary to move. Read as a single row of columns -- which is also
+-- exactly what a grid looks like -- they came apart the moment either half
+-- moved, so hyprecise refused the layout outright and every chord on a grid was
+-- dead. Each row now resizes on its own, and the other one does not stir.
+check("a grid resizes one row at a time", every_chord(function()
   return stack(side(leaf("A"), leaf("B")), side(leaf("C"), leaf("E")))
+end, lands_in_row), true)
+
+-- Three rows, and the third is nested one level deeper than the first two: how
+-- the bands were arrived at is no more inspected than the inside of a column.
+check("three rows resize independently", every_chord(function()
+  return stack(side(leaf("A"), leaf("B")), stack(side(leaf("C"), leaf("E")), side(leaf("F"), leaf("G"))))
+end, lands_in_row), true)
+
+-- A row whose columns are of different depths, under a row of two: the row
+-- reading has to come first, or the workspace reads as one column again.
+check("rows of different shapes do not disturb each other", every_chord(function()
+  return stack(side(leaf("A"), leaf("B")), side(stack(leaf("C"), leaf("E")), leaf("F")))
+end, lands_in_row), true)
+
+-- A pure vertical stack is a row per window, and a row of one is a no-op --
+-- which is what a full-width stack was before rows too, by way of reading as a
+-- single column.
+check("a vertical stack is still a no-op", every_chord(function()
+  return stack(leaf("A"), stack(leaf("B"), leaf("C")))
 end, untouched), true)
 
 -- Whatever a chord does, it never leaves a column narrower than the layout could
