@@ -11,6 +11,53 @@ callable module, and the internals the offline spec reaches for — and so are t
 tuning knobs, which exist to work around how the layout engine reacts to a
 resize and may change in any release.
 
+## [1.1.0] — 2026-08-27
+
+Hyprecise read a workspace as one row of columns. A workspace cut across its full
+width is not one row, and every chord on one was a silent no-op.
+
+### Added
+
+- **A row is a maximal y-interval that no window crosses**, and a chord is about
+  the focused window's row alone. It is the same sweep that finds columns, turned
+  ninety degrees, and it runs first — because it says which windows the column
+  reading is then about. `M.rows` joins `M.columns` in the pure core, and
+  `row_tolerance` (default 8) joins `column_tolerance` beside it.
+
+### Fixed
+
+- **A row below a full-width window can be resized.** `A` across the top with
+  `B | C` beneath it read as a *single* column, because `A` crosses the `B | C`
+  boundary — so there was no boundary to move and all four chords, from all three
+  windows, did nothing at all. `B` and `C` are now a row of two: on a 3440
+  monitor, `Right` from `C` takes them from `1699 | 1699` to `2266 | 1132`, and
+  `A` keeps its 3414 to the pixel.
+- **A grid resizes one row at a time.** Two side-by-side splits stacked one above
+  the other present exactly the edges a single row of columns would, and come
+  apart the moment either half is moved — so 1.0.1 detected that and refused the
+  layout outright, leaving every chord on a grid dead. Read as two rows, each has
+  its own boundary and moves without disturbing the other, whether or not the two
+  rows are split at the same place. The one grid that still moves as a whole is
+  the one built as a pair of stacks side by side, where both rows are halves of a
+  single vertical split: that split is genuinely shared, and no dispatch can
+  separate them.
+- **A row of one is a no-op rather than a phantom column.** The full-width window
+  over a pair has no neighbour to share a boundary with, and heights are out of
+  scope, so a chord from it changes nothing — including the nudges it would have
+  asked with.
+
+### Changed
+
+- `M.row_windows` is `M.workspace_windows`. It filters the workspace by monitor
+  and workspace, which is a step before the row reading rather than the row
+  reading itself. Outside the supported surface, and untouched in behaviour.
+- The offline spec grows a row-detection section and drives the real `run` over
+  four multi-row trees, checking both halves of what a chord owes them: the
+  focused row lands on its plan, and every window outside it keeps its geometry
+  to the pixel. 138 assertions, up from 119. The twelve focus-and-direction
+  results on a single-row workspace are byte-identical to 1.0.1, live on
+  Hyprland 0.56.2.
+
 ## [1.0.1] — 2026-08-26
 
 One bug, in the half of hyprecise that had no tests: what a resize dispatch does
@@ -183,6 +230,7 @@ Initial release.
 - Offline spec covering the pure decision core: 46 assertions, no compositor
   required.
 
+[1.1.0]: https://github.com/vitormil/hyprecise/compare/v1.0.1...v1.1.0
 [1.0.1]: https://github.com/vitormil/hyprecise/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/vitormil/hyprecise/compare/v0.1.0...v1.0.0
 [0.1.0]: https://github.com/vitormil/hyprecise/releases/tag/v0.1.0
