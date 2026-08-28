@@ -95,6 +95,25 @@ stacks side by side rather than two rows stacked — that split belongs to both
 rows at once, so moving it moves both. No dispatch exists that would separate
 them.
 
+## Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `SUPER + ALT + Right` | Move the focused column's **right** edge rightward\* |
+| `SUPER + ALT + Left`  | Move the focused column's **left** edge leftward\* |
+| `SUPER + ALT + Up`    | Jump to the widest stop (press again for the even split) |
+| `SUPER + ALT + Down`  | Jump to the even split (press again for the narrowest stop) |
+
+The ladder is a cycle: a step past either end lands on the other.
+
+\* The **rightmost** column has no right edge to move — the screen is there — so
+`Right` shrinks it and `Left` grows it. That is what makes a two-window layout
+behave the same way from either focus position.
+
+Nothing happens on a floating or fullscreen window, on a workspace with fewer
+than two tiled windows, or on a row that is a single column. A keypress only
+ever touches the focused window's own workspace, monitor and row.
+
 ## Requirements
 
 - **Hyprland with Lua configuration.** Developed and used on 0.56.2.
@@ -136,52 +155,19 @@ Hyprland log and raises a notification. It cannot take the rest of your bindings
 down with it. Each keypress is separately wrapped, for the same reason.
 
 > [!IMPORTANT]
-> **On Omarchy, `SUPER + ALT + <arrow>` is already taken.** Personal bindings
-> load after Omarchy's defaults, so the line above replaces these four:
+> **On Omarchy, `SUPER + ALT + <arrow>` is already taken** — the four chords
+> move a window into the group on that side. Personal bindings load after
+> Omarchy's defaults, so the line above replaces all four.
 >
-> | Binding | Omarchy default it replaces |
-> |---|---|
-> | `SUPER + ALT + Left`  | Move window to group on left |
-> | `SUPER + ALT + Right` | Move window to group on right |
-> | `SUPER + ALT + Up`    | Move window to group on top |
-> | `SUPER + ALT + Down`  | Move window to group on bottom |
+> Hyprecise's author does not use window grouping, so that trade cost nothing.
+> If you do use it, keep this in mind: pass `keys` a chord off the arrows, or
+> rehome the group bindings, which are ordinary
+> `hl.dsp.window.move({ into_group = "l" })` dispatches and work anywhere you
+> put them. Omarchy's [navigation manual](https://omarchy.org/manual/navigation/)
+> lists what else the arrows carry.
 >
-> There is no clean alternative to move to: Omarchy binds *every* modifier over
-> the arrows — plain `SUPER` focuses, `SHIFT` swaps, `ALT` groups, `SHIFT + ALT`
-> moves the workspace between monitors, `CTRL` walks a group. So if you use
-> window grouping, either give hyprecise non-arrow chords with `keys`, or rehome
-> the group bindings — they are ordinary
-> `hl.dsp.window.move({ into_group = "l" })` dispatches and will work anywhere
-> you put them.
->
-> Hyprecise binds with a description, so whatever it takes over is visible in
+> Hyprecise binds with a description, so whatever it takes over stays visible in
 > `omarchy menu keybindings --print` rather than merely gone.
-
-## Shortcuts
-
-| Shortcut | Action |
-|---|---|
-| `SUPER + ALT + Right` | Move the focused column's **right** edge rightward\* |
-| `SUPER + ALT + Left`  | Move the focused column's **left** edge leftward\* |
-| `SUPER + ALT + Up`    | Jump to the widest stop (press again for the even split) |
-| `SUPER + ALT + Down`  | Jump to the even split (press again for the narrowest stop) |
-
-The ladder is a cycle: a step past the widest stop lands on the narrowest, and
-one past the narrowest lands on the widest.
-
-\* For the **rightmost** column the right edge *is* the screen edge and cannot
-move, so `Right` moves its left edge rightward instead — the column shrinks.
-`Left` likewise grows it. This is what makes a two-window layout behave the same
-way from either focus position, and it is deliberate, not a bug.
-
-Every path is silent. Nothing happens on a floating or fullscreen window, on a
-workspace with fewer than two tiled windows, on a row that is a single column, or
-when the requested move would be smaller than the convergence tolerance.
-
-A keypress only ever reads or moves windows on the focused window's own
-workspace, on the focused window's own monitor, in the focused window's own row.
-Anything else is dropped before the layout is read, so every column a keypress
-touches is on the current monitor by construction.
 
 ## Breakpoints
 
