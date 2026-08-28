@@ -122,7 +122,8 @@ reachable as a stop, so "make it even again" is one keypress away from anywhere.
 ## Floor
 
 The narrowest a non-focused column may become. It exists so that widening the
-focused column can never squeeze a neighbour into uselessness.
+focused column can never squeeze a neighbour into uselessness. Like the ladder it
+trims, it is derived rather than configured: a twelfth of the available width.
 
 ## Snap
 

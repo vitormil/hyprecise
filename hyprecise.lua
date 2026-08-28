@@ -96,7 +96,6 @@ end
 local DEFAULTS = {
   keys = "SUPER + ALT", -- modifier prefix, or a direction -> chord table
   loop = true, -- wrap around the ends of the ladder
-  min_width = nil, -- floor for a non-focused column; nil = available/12
   snap = nil, -- "same stop" tolerance; nil = max(16, available/100)
   column_tolerance = 8, -- px slack when bucketing windows into columns
   row_tolerance = 8, -- px slack when bucketing windows into rows
@@ -330,6 +329,12 @@ local IDEAL_SLICE = 540
 -- by about a window border.
 local MIN_SLICES, MAX_SLICES = 3, 8
 
+-- The floor, as a fraction of the available width: the narrowest a non-focused
+-- column may be squeezed to. Derived rather than configured, for the same reason
+-- the ladder it trims is -- what a column needs in order to stay useful is a
+-- property of the monitor, and nothing a config knows better.
+local FLOOR_DIVISOR = 12
+
 --- How many equal slices the row is cut into, read from the available width.
 function M.granularity(available)
   local slices = round(available / IDEAL_SLICE)
@@ -384,10 +389,9 @@ function M.build_ladder(available, row_width, n, opts)
     spliced[#spliced + 1] = fair
   end
 
-  -- The floor is a fraction of the screen, not of the ladder. It says what a
-  -- column needs in order to stay useful, which is a property of the monitor and
-  -- not of how many stops happen to fit across it.
-  local floor_w = opts.min_width or idiv(available, 12)
+  -- The floor reads the screen, not the ladder, so it does not move when the
+  -- number of columns does.
+  local floor_w = idiv(available, FLOOR_DIVISOR)
   local max_focused = row_width - (n - 1) * floor_w
   local ladder = {}
   for _, s in ipairs(spliced) do

@@ -118,9 +118,10 @@ local l6 = M.build_ladder(MW, 3360, 6)
 check("N=6 ladder (top stops trimmed by floor)", l6, { 560, 1120, 1680 })
 
 -- The floor reads the screen, not the ladder, so it does not move when the
--- number of windows does.
-local narrow = M.build_ladder(MW, 3398, 2, { min_width = 1500 })
-check("a raised floor removes the wide stops", narrow, { 1699 })
+-- number of windows does -- and past a certain crowd it is what is left of the
+-- ladder.
+local crowded = M.build_ladder(MW, 3398, 10)
+check("at ten columns only the stops that clear the floor survive", crowded, { 339, 566 })
 
 -- ---------------------------------------------------------------------------
 -- N=2 -- must keep behaving the way it always has, from either focus position

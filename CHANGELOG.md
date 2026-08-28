@@ -4,12 +4,23 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-From 1.0.0 on, the supported surface is `setup(opts)` and its `keys`, `loop` and
-`min_width` options: a breaking change to any of them takes a major bump.
-Everything else the module exposes is outside that promise — `M.run`, the
-callable module, and the internals the offline spec reaches for — and so are the
-tuning knobs, which exist to work around how the layout engine reacts to a
-resize and may change in any release.
+From 1.0.0 on, the supported surface is `setup(opts)` and its `keys` and `loop`
+options: a breaking change to either of them takes a major bump. Everything else
+the module exposes is outside that promise — `M.run`, the callable module, and
+the internals the offline spec reaches for — and so are the tuning knobs, which
+exist to work around how the layout engine reacts to a resize and may change in
+any release.
+
+## [Unreleased]
+
+### Removed
+
+- **`min_width` is no longer an option.** The floor a non-focused column may not
+  be squeezed below stays exactly where it was — a twelfth of the available
+  width — but it is now derived rather than configured, like the ladder it trims.
+  What a column needs in order to stay useful is a property of the monitor, and
+  the option only offered ways to get that wrong. A config still passing
+  `min_width` binds and runs as before; the value is ignored.
 
 ## [1.1.0] — 2026-08-27
 

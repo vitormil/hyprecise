@@ -70,7 +70,6 @@ Pass options to change any of it:
 dofile(os.getenv("HOME") .. "/.config/hyprecise/hyprecise.lua").setup({
   keys = "SUPER + CTRL", -- a different modifier, arrows appended
   loop = true, -- wrap around the ends of the ladder
-  min_width = 400, -- never squeeze a neighbour below this
 })
 ```
 
@@ -206,14 +205,13 @@ each near 540px. Every multiple of a slice short of the whole is a stop.
 
 ## Options
 
-Pass these to `setup()`. These three are the supported surface: from 1.0.0 on, a
-breaking change to any of them takes a major version bump.
+Pass these to `setup()`. These two are the supported surface: from 1.0.0 on, a
+breaking change to either of them takes a major version bump.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `keys` | `"SUPER + ALT"` | A modifier prefix, which binds all four arrows. Or a table naming chords per direction — `{ left = "SUPER + H", right = "SUPER + L", up = "SUPER + K", down = "SUPER + J" }` — which binds only the directions it names. |
 | `loop` | `true` | Wrap around the ends of the ladder. With `false`, pressing past the widest or narrowest stop does nothing. |
-| `min_width` | `nil` | Floor in px for a *non-focused* column. `nil` means available width ÷ 12. Raising it removes wide stops from the ladder. |
 
 If gaps or thick borders make one column read as two, `column_tolerance`
 (default 8) is the knob to raise — `row_tolerance` (also 8) is its counterpart

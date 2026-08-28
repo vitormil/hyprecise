@@ -83,11 +83,11 @@ case; anything else cancels and changes nothing. Add `--yes` to skip the prompt 
 
 | Bump | When |
 |---|---|
-| `patch` | A bug fix. Nothing about `setup()`, `keys`, `loop` or `min_width` changes. |
+| `patch` | A bug fix. Nothing about `setup()`, `keys` or `loop` changes. |
 | `minor` | A new option or behaviour, with nothing that already worked breaking. |
-| `major` | A breaking change to `setup()`, `keys`, `loop` or `min_width`. |
+| `major` | A breaking change to `setup()`, `keys` or `loop`. |
 
-Those four are the supported surface, fixed at 1.0.0. Everything else the
+Those three are the supported surface, fixed at 1.0.0. Everything else the
 module exposes — `M.run`, the callable module, the internals the spec reaches
 for, and tuning knobs like `column_tolerance` — sits outside that promise, so
 changing one of them does not force a major bump.
