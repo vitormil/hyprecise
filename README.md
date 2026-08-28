@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/vitormil/hyprecise/actions/workflows/test.yml/badge.svg)](https://github.com/vitormil/hyprecise/actions/workflows/test.yml)
 
-**Precise, repeatable window width control for Hyprland.**
+**Easy window resizing for Hyprland.**
 
 Hyprland's built-in resize bindings move a window by a fixed pixel delta — press
 the key four times and you land somewhere arbitrary, different every session.
@@ -125,11 +125,11 @@ workspace, on the focused window's own monitor, in the focused window's own row.
 Anything else is dropped before the layout is read, so every column a keypress
 touches is on the current monitor by construction.
 
-## Nested windows are still one column
+## Rows and columns
 
-A column is a maximal x-interval that **no window crosses**. Split a column into
-a stack, split one of those into a pair, split that pair again — it is still one
-column, and hyprecise never looks inside.
+A **column** is a maximal x-interval that no window crosses. A **row** is the
+same reading turned ninety degrees. A chord moves one boundary of the focused
+window's row, and never looks inside a column.
 
 ```
    ┌────────────┬────────────┬─── C ──────┐
@@ -141,18 +141,9 @@ column, and hyprecise never looks inside.
    the row is  A │ B │ C  — three columns, always
 ```
 
-Focus `A`, `B`, `D`, `F` or `G` and the chord moves the boundary of the column
-holding it, the splits inside keeping their proportions — so `Right` does the
-same thing from `D`, `F` and `G`, because all three are column `C`. A column no
-member spans has no window whose resize is known to move the outer edge, and a
-row containing one stays silent.
-
-## Rows resize one at a time
-
-Cut a workspace across its full width and it is no longer one row of columns but
-several, stacked. A row is a maximal y-interval that **no window crosses** — the
-same reading as a column, turned ninety degrees. A chord is about the focused
-window's row, and leaves every other row exactly where it is.
+Split a column, split the halves again — it is still one column. `Right` does
+the same thing from `D`, `F` and `G`, because all three are `C`, and the splits
+inside keep their proportions.
 
 ```
    ┌───────────────────────────────────────┐
@@ -171,23 +162,16 @@ window's row, and leaves every other row exactly where it is.
    └────────────────────────────┴──────────┘
 ```
 
-Focus `B` or `C` and the chord steps that row's ladder; `A` never moves, and no
-height ever changes. Focus `A` and nothing happens: its row holds one window,
-which has no neighbour to share a boundary with.
+Rows resize one at a time. A grid is two rows, each with its own boundary, and
+they need not be split at the same place; a workspace with no full-width cut is
+one row holding everything, which is what most workspaces are.
 
-A grid works the same way — two rows of two, each with its own boundary — and
-the two rows need not be split at the same place. A workspace with no full-width
-cut is a single row holding every window, which is what hyprecise has always read
-and what most workspaces are.
-
-One layout still stays silent: a window straddling its neighbours' boundary
-leaves its row a single column, which has no boundary to move.
-
-And one moves more than its row, unavoidably. Where two rows are the two halves
-of *one* vertical split — a grid built as a pair of stacks side by side, rather
-than as a pair of rows one above the other — that split belongs to both rows at
-once. Moving it moves both, and no dispatch exists that would separate them.
-Every other grid resizes a row at a time.
+Two layouts are exceptions. A window straddling its neighbours' boundary leaves
+its row a single column, which has no boundary to move, so nothing happens. And
+where two rows are the halves of *one* vertical split — a grid built as two
+stacks side by side rather than two rows stacked — that split belongs to both
+rows at once, so moving it moves both. No dispatch exists that would separate
+them.
 
 ## Breakpoints
 
