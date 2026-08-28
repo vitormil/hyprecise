@@ -37,6 +37,64 @@ height.
               2/3              1/6    1/6
 ```
 
+## Rows and columns
+
+A chord resizes the whole *column* the focused window sits in, sharing what is
+left with the other columns of its *row*. Nested splits ride along, keeping
+their proportions.
+
+```
+   ┌────────────┬────────────┬─── C ──────┐
+   │            │            │     D      │
+   │     A      │     B      ├──────┬─────┤
+   │            │            │  F   │  G  │
+   └────────────┴────────────┴──────┴─────┘
+         1/3          1/3          1/3
+
+   the row is  A │ B │ C  — D, F and G are all column C
+
+                      │  SUPER + ALT + Left  (C focused)
+                      ▼
+
+   ┌─────────┬─────────┬─────── C ────────┐
+   │         │         │        D         │
+   │    A    │    B    ├────────┬─────────┤
+   │         │         │   F    │    G    │
+   └─────────┴─────────┴────────┴─────────┘
+        1/4       1/4          1/2
+```
+
+Cut a workspace across its full width and it holds several rows, resized one at
+a time.
+
+```
+   ┌───────────────────────────────────────┐
+   │                   A                   │   row 1
+   ├──────────────────┬────────────────────┤
+   │        B         │         C          │   row 2
+   └──────────────────┴────────────────────┘
+
+                      │  SUPER + ALT + Right  (C focused)
+                      ▼
+
+   ┌───────────────────────────────────────┐
+   │                   A                   │   unchanged
+   ├────────────────────────────┬──────────┤
+   │             B              │    C     │
+   └────────────────────────────┴──────────┘
+```
+
+A grid is two rows, each with its own boundary, and they need not be split at
+the same place; a workspace with no full-width cut is one row holding
+everything, which is what most workspaces are.
+
+Two layouts are exceptions. A window straddling its neighbours' boundary leaves
+its row a single column, which has no boundary to move, so nothing happens. And
+where two rows are the halves of *one* vertical split — a grid built as two
+stacks side by side rather than two rows stacked — that split belongs to both
+rows at once, so moving it moves both. No dispatch exists that would separate
+them.
+
 ## Requirements
 
 - **Hyprland with Lua configuration.** Developed and used on 0.56.2.
@@ -124,54 +182,6 @@ A keypress only ever reads or moves windows on the focused window's own
 workspace, on the focused window's own monitor, in the focused window's own row.
 Anything else is dropped before the layout is read, so every column a keypress
 touches is on the current monitor by construction.
-
-## Rows and columns
-
-A **column** is a maximal x-interval that no window crosses. A **row** is the
-same reading turned ninety degrees. A chord moves one boundary of the focused
-window's row, and never looks inside a column.
-
-```
-   ┌────────────┬────────────┬─── C ──────┐
-   │            │            │     D      │
-   │     A      │     B      ├──────┬─────┤
-   │            │            │  F   │  G  │
-   └────────────┴────────────┴──────┴─────┘
-
-   the row is  A │ B │ C  — three columns, always
-```
-
-Split a column, split the halves again — it is still one column. `Right` does
-the same thing from `D`, `F` and `G`, because all three are `C`, and the splits
-inside keep their proportions.
-
-```
-   ┌───────────────────────────────────────┐
-   │                   A                   │   row 1
-   ├──────────────────┬────────────────────┤
-   │        B         │         C          │   row 2
-   └──────────────────┴────────────────────┘
-
-                      │  SUPER + ALT + Right  (C focused)
-                      ▼
-
-   ┌───────────────────────────────────────┐
-   │                   A                   │   unchanged
-   ├────────────────────────────┬──────────┤
-   │             B              │    C     │
-   └────────────────────────────┴──────────┘
-```
-
-Rows resize one at a time. A grid is two rows, each with its own boundary, and
-they need not be split at the same place; a workspace with no full-width cut is
-one row holding everything, which is what most workspaces are.
-
-Two layouts are exceptions. A window straddling its neighbours' boundary leaves
-its row a single column, which has no boundary to move, so nothing happens. And
-where two rows are the halves of *one* vertical split — a grid built as two
-stacks side by side rather than two rows stacked — that split belongs to both
-rows at once, so moving it moves both. No dispatch exists that would separate
-them.
 
 ## Breakpoints
 
