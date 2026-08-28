@@ -95,7 +95,6 @@ end
 
 local DEFAULTS = {
   keys = "SUPER + ALT", -- modifier prefix, or a direction -> chord table
-  loop = true, -- wrap around the ends of the ladder
   snap = nil, -- "same stop" tolerance; nil = max(16, available/100)
   column_tolerance = 8, -- px slack when bucketing windows into columns
   row_tolerance = 8, -- px slack when bucketing windows into rows
@@ -459,7 +458,7 @@ function M.plan(input)
   local fair_stop = math.max(ladder[1], math.min(ladder[#ladder], fair))
 
   local current = widths[focused]
-  local target = M.step(ladder, current, fair_stop, input.direction, focused == n, snap, opts.loop)
+  local target = M.step(ladder, current, fair_stop, input.direction, focused == n, snap)
   if not target or math.abs(target - current) <= opts.converge_tolerance then
     return nil
   end
@@ -474,7 +473,12 @@ function M.plan(input)
 end
 
 --- Move one stop along the ladder, past `current` in the requested direction.
-function M.step(ladder, current, fair, direction, is_last, snap, loop)
+---
+--- The ladder is a cycle: a step past the widest stop lands on the narrowest,
+--- and one past the narrowest lands on the widest. A ladder that stopped at its
+--- ends would make a chord's effect depend on where the column already was, and
+--- the whole point of stepping a ladder is that it does not.
+function M.step(ladder, current, fair, direction, is_last, snap)
   local lo, hi = ladder[1], ladder[#ladder]
 
   if direction == "up" then
@@ -502,14 +506,14 @@ function M.step(ladder, current, fair, direction, is_last, snap, loop)
         return s
       end
     end
-    return loop and lo or hi
+    return lo
   end
   for i = #ladder, 1, -1 do
     if ladder[i] < current - snap then
       return ladder[i]
     end
   end
-  return loop and hi or lo
+  return hi
 end
 
 -- --------------------------------------------------------------------------

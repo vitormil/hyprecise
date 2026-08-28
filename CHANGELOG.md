@@ -4,8 +4,8 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-From 1.0.0 on, the supported surface is `setup(opts)` and its `keys` and `loop`
-options: a breaking change to either of them takes a major bump. Everything else
+From 1.0.0 on, the supported surface is `setup(opts)` and its `keys` option: a
+breaking change to either takes a major bump. Everything else
 the module exposes is outside that promise — `M.run`, the callable module, and
 the internals the offline spec reaches for — and so are the tuning knobs, which
 exist to work around how the layout engine reacts to a resize and may change in
@@ -14,6 +14,13 @@ any release.
 ## [Unreleased]
 
 ### Removed
+
+- **`loop` is no longer an option.** The ladder is a cycle, and now
+  unconditionally: `loop = false` stopped a chord dead at either end of it, which
+  made the same keypress on the same layout do something or nothing depending on
+  where the column already sat. Stepping a ladder exists to take that dependence
+  away, so the exception goes. A config still passing `loop` binds and runs; the
+  value is ignored, so one that set `false` now wraps.
 
 - **`min_width` is no longer an option.** The floor a non-focused column may not
   be squeezed below stays exactly where it was — a twelfth of the available

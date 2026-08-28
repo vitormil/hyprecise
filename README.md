@@ -64,12 +64,11 @@ dofile(os.getenv("HOME") .. "/.config/hyprecise/hyprecise.lua").setup()
 
 That binds `SUPER + ALT + <arrow>` to the four directions, with descriptions, so
 they show up in `omarchy menu keybindings --print` alongside everything else.
-Pass options to change any of it:
+Pass `keys` to bind something else:
 
 ```lua
 dofile(os.getenv("HOME") .. "/.config/hyprecise/hyprecise.lua").setup({
   keys = "SUPER + CTRL", -- a different modifier, arrows appended
-  loop = true, -- wrap around the ends of the ladder
 })
 ```
 
@@ -108,6 +107,9 @@ down with it. Each keypress is separately wrapped, for the same reason.
 | `SUPER + ALT + Left`  | Move the focused column's **left** edge leftward\* |
 | `SUPER + ALT + Up`    | Jump to the widest stop (press again for the even split) |
 | `SUPER + ALT + Down`  | Jump to the even split (press again for the narrowest stop) |
+
+The ladder is a cycle: a step past the widest stop lands on the narrowest, and
+one past the narrowest lands on the widest.
 
 \* For the **rightmost** column the right edge *is* the screen edge and cannot
 move, so `Right` moves its left edge rightward instead — the column shrinks.
@@ -205,13 +207,12 @@ each near 540px. Every multiple of a slice short of the whole is a stop.
 
 ## Options
 
-Pass these to `setup()`. These two are the supported surface: from 1.0.0 on, a
-breaking change to either of them takes a major version bump.
+`keys` is the option, and the whole of the supported surface: from 1.0.0 on, a
+breaking change to it takes a major version bump.
 
 | Option | Default | Meaning |
 |---|---|---|
 | `keys` | `"SUPER + ALT"` | A modifier prefix, which binds all four arrows. Or a table naming chords per direction — `{ left = "SUPER + H", right = "SUPER + L", up = "SUPER + K", down = "SUPER + J" }` — which binds only the directions it names. |
-| `loop` | `true` | Wrap around the ends of the ladder. With `false`, pressing past the widest or narrowest stop does nothing. |
 
 If gaps or thick borders make one column read as two, `column_tolerance`
 (default 8) is the knob to raise — `row_tolerance` (also 8) is its counterpart
@@ -244,7 +245,7 @@ the suite runs anywhere:
 lua tests/hyprecise_spec.lua
 ```
 
-138 assertions covering granularity across monitor sizes, ladder construction,
+137 assertions covering granularity across monitor sizes, ladder construction,
 stepping, redistribution, width conservation, the floor, workspace membership
 (including the dropping of out-of-scope windows), row detection, column detection
 (vertical stacks, nested trees at several depths, straddling windows, and columns

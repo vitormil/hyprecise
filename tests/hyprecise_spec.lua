@@ -181,9 +181,9 @@ check("N=1 -> no-op", plan({ 3414 }, 1, "right"), nil)
 check("bad direction -> no-op", plan(two, 1, "sideways"), nil)
 check("focus out of range -> no-op", plan(two, 3, "right"), nil)
 
-check("loop=true wraps past the top", targets({ 2831, 567 }, 1, "right", { loop = true }), { 566, 2832 })
-check("loop=false clamps (no-op at the top)", plan({ 2831, 567 }, 1, "right", { loop = false }), nil)
-check("loop=true wraps past the bottom", targets({ 566, 2832 }, 1, "left", { loop = true }), { 2831, 567 })
+-- The ladder is a cycle, always: a step past either end lands on the other.
+check("a step past the widest stop wraps to the narrowest", targets({ 2831, 567 }, 1, "right"), { 566, 2832 })
+check("a step past the narrowest stop wraps to the widest", targets({ 566, 2832 }, 1, "left"), { 2831, 567 })
 
 -- Too many columns for the floor to allow any stop at all.
 local many = {}
